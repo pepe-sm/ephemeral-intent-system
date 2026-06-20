@@ -156,7 +156,10 @@ class BiometricAnalyzer:
             return 0.3  # Default moderate value
     
     def _compute_ear_for_eye(self, landmarks: np.ndarray, indices: List[int]) -> float:
-        """Compute EAR for a single eye"""
+        """Compute EAR for a single eye
+        
+        Returns value clamped to [0.0, 1.0] range for model validation
+        """
         if len(landmarks.shape) == 3:
             # Average across frames
             landmarks = np.mean(landmarks, axis=0)
@@ -171,8 +174,13 @@ class BiometricAnalyzer:
         # Horizontal distance
         h = np.linalg.norm(eye_points[0] - eye_points[3])
         
-        # EAR formula
-        ear = (v1 + v2) / (2.0 * h) if h > 0 else 0.3
+        # EAR formula with clamping to valid range [0.0, 1.0]
+        if h > 0:
+            ear = (v1 + v2) / (2.0 * h)
+            # Clamp to valid range for Pydantic model validation
+            ear = max(0.0, min(1.0, ear))
+        else:
+            ear = 0.3  # Default moderate value
         
         return ear
     
