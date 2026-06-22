@@ -426,35 +426,725 @@ Respond in a structured format."""
         session_id: str,
         complexity: Optional[ComplexityLevel]
     ) -> KnowledgePayload:
-        """Create mock knowledge payload for testing"""
+        """Create mock knowledge payload with educational content"""
         complexity = complexity or ComplexityLevel.INTERMEDIATE
+        
+        # Generate educational content based on query keywords
+        query_lower = query.lower()
+        
+        # Determine topic and create relevant content
+        if any(word in query_lower for word in ['code', 'coding', 'program', 'python', 'javascript', 'java']):
+            modules = self._create_coding_modules(query, complexity)
+            core_concept = "Programming Fundamentals"
+        elif any(word in query_lower for word in ['react', 'vue', 'angular', 'frontend', 'web']):
+            modules = self._create_web_dev_modules(query, complexity)
+            core_concept = "Web Development"
+        elif any(word in query_lower for word in ['data', 'machine learning', 'ai', 'algorithm']):
+            modules = self._create_data_science_modules(query, complexity)
+            core_concept = "Data Science & AI"
+        else:
+            # Generic educational content
+            modules = self._create_generic_modules(query, complexity)
+            core_concept = f"Understanding {query[:50]}"
         
         return KnowledgePayload(
             session_id=session_id,
             query=query,
-            core_concept=f"Understanding {query[:30]}",
+            core_concept=core_concept,
             complexity_level=complexity,
-            teaching_modules=[
-                TeachingModule(
-                    module_id="mock_001",
-                    type=ModuleType.EXPLANATION,
-                    title="Introduction",
-                    content=f"This is a mock response for: {query}",
-                    estimated_time=60,
-                    complexity=complexity,
-                    interactive=False,
-                    order=0
-                )
-            ],
-            related_concepts=["Concept A", "Concept B"],
+            teaching_modules=modules,
+            related_concepts=self._generate_related_concepts(query),
             source_references=[],
-            total_estimated_time=60,
-            keywords=query.lower().split()[:3],
+            total_estimated_time=sum(m.estimated_time for m in modules),
+            keywords=query.lower().split()[:5],
             metadata={
                 "mock_mode": True,
-                "rag_model": "mock"
+                "rag_model": "mock",
+                "note": "This is generated content for demonstration. Configure watsonx.ai for real knowledge retrieval."
             }
         )
+    
+    def _create_coding_modules(self, query: str, complexity: ComplexityLevel) -> List[TeachingModule]:
+        """Create coding-related educational modules with comprehensive content"""
+        return [
+            TeachingModule(
+                module_id="coding_001",
+                type=ModuleType.EXPLANATION,
+                title="What is Programming?",
+                content="""Programming is the art and science of creating instructions for computers to execute. At its core, programming involves:
+
+Key Concepts:
+• Algorithms: Step-by-step procedures to solve problems
+• Data Structures: Ways to organize and store data efficiently
+• Logic: Using conditional statements and loops to control program flow
+• Abstraction: Breaking complex problems into manageable pieces
+
+Why Learn Programming?
+Programming empowers you to automate tasks, analyze data, build applications, and bring your ideas to life. It's a fundamental skill in our digital age, applicable across industries from healthcare to finance to entertainment.
+
+The Programming Mindset:
+Think like a programmer by breaking problems into smaller steps, testing your assumptions, and iterating on solutions. Debugging is part of the process - every error is a learning opportunity!""",
+                estimated_time=120,
+                complexity=complexity,
+                interactive=False,
+                order=0
+            ),
+            TeachingModule(
+                module_id="coding_002",
+                type=ModuleType.STEP_BY_STEP,
+                title="Your Programming Journey",
+                content="""Step 1: Choose Your First Language
+Python is excellent for beginners due to its readable syntax. JavaScript is great for web development. Java and C++ are powerful for larger applications.
+
+Step 2: Set Up Your Environment
+• Install Python from python.org or use an online IDE like Replit
+• Choose a code editor: VS Code, PyCharm, or Sublime Text
+• Learn to use the terminal/command line
+
+Step 3: Master the Fundamentals
+• Variables: Store and manipulate data
+• Data Types: Numbers, strings, booleans, lists
+• Operators: Arithmetic, comparison, logical
+• Control Flow: if/else statements, loops (for, while)
+• Functions: Reusable blocks of code
+
+Step 4: Practice Daily
+• Solve coding challenges on LeetCode, HackerRank, or Codewars
+• Build small projects: calculator, to-do list, simple game
+• Read other people's code to learn different approaches
+
+Step 5: Build Real Projects
+Start with something you're passionate about - a personal website, a data analysis tool, or a game. Real projects teach you problem-solving and debugging skills that tutorials can't.""",
+                estimated_time=180,
+                complexity=complexity,
+                interactive=False,
+                order=1
+            ),
+            TeachingModule(
+                module_id="coding_003",
+                type=ModuleType.CODE_EXAMPLE,
+                title="Python Fundamentals - Interactive Examples",
+                content="""Example 1: Variables and Data Types
+
+# Variables store data
+name = "Alice"
+age = 25
+height = 5.6
+is_student = True
+
+print(f"{name} is {age} years old and {height} feet tall")
+
+
+Example 2: Lists and Loops
+
+# Lists store multiple items
+fruits = ["apple", "banana", "cherry", "date"]
+
+# Loop through the list
+for fruit in fruits:
+    print(f"I like {fruit}s!")
+
+# List operations
+fruits.append("elderberry")
+print(f"Total fruits: {len(fruits)}")
+
+
+Example 3: Functions
+
+def calculate_area(length, width):
+    area = length * width
+    return area
+
+# Use the function
+room_area = calculate_area(10, 12)
+print(f"Room area: {room_area} square feet")
+
+
+Example 4: Conditional Logic
+
+temperature = 75
+
+if temperature > 80:
+    print("It's hot! Stay hydrated.")
+elif temperature > 60:
+    print("Nice weather!")
+else:
+    print("It's cold. Wear a jacket.")
+
+
+Try It Yourself:
+Modify these examples! Change values, add new features, or combine concepts to create something unique.""",
+                estimated_time=150,
+                complexity=complexity,
+                interactive=True,
+                order=2
+            ),
+            TeachingModule(
+                module_id="coding_004",
+                type=ModuleType.EXPLANATION,
+                title="Common Programming Patterns",
+                content="""1. Input-Process-Output Pattern
+Most programs follow this flow: get input from user, process it, display output.
+
+2. Iteration Pattern
+Use loops to repeat actions: processing lists, reading files, or retrying operations.
+
+3. Conditional Pattern
+Make decisions based on conditions: validating input, handling different cases, error checking.
+
+4. Function Pattern
+Break code into reusable functions: each function does one thing well, making code maintainable.
+
+5. Error Handling Pattern
+Anticipate and handle errors gracefully using try-except blocks (Python) or try-catch (JavaScript/Java).
+
+Best Practices:
+• Write clear, descriptive variable names
+• Comment your code to explain "why", not "what"
+• Keep functions small and focused
+• Test your code frequently
+• Use version control (Git) from day one""",
+                estimated_time=90,
+                complexity=complexity,
+                interactive=False,
+                order=3
+            )
+        ]
+    
+    def _create_web_dev_modules(self, query: str, complexity: ComplexityLevel) -> List[TeachingModule]:
+        """Create comprehensive web development educational modules"""
+        return [
+            TeachingModule(
+                module_id="web_001",
+                type=ModuleType.EXPLANATION,
+                title="Web Development Fundamentals",
+                content="""Web development is the process of building websites and web applications that run in browsers. It encompasses:
+
+Frontend Development (Client-Side):
+• HTML: Structure and content of web pages
+• CSS: Styling, layout, and visual design
+• JavaScript: Interactivity and dynamic behavior
+• Frameworks: React, Vue, Angular for complex applications
+
+Backend Development (Server-Side):
+• Server logic and APIs
+• Database management
+• Authentication and security
+• Languages: Python, Node.js, Java, PHP
+
+Full-Stack Development:
+Combines both frontend and backend skills to build complete web applications.
+
+Modern Web Technologies:
+• Responsive Design: Works on all devices
+• Progressive Web Apps: App-like experiences
+• Single Page Applications: Fast, smooth navigation
+• RESTful APIs: Communication between frontend and backend""",
+                estimated_time=120,
+                complexity=complexity,
+                interactive=False,
+                order=0
+            ),
+            TeachingModule(
+                module_id="web_002",
+                type=ModuleType.STEP_BY_STEP,
+                title="Building Your First Website",
+                content="""Step 1: Set Up Your Project
+Create a folder for your website and open it in VS Code or your preferred editor.
+
+Step 2: Create HTML Structure (index.html)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My First Website</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Welcome to My Website</h1>
+        <nav>
+            <a href="#about">About</a>
+            <a href="#projects">Projects</a>
+            <a href="#contact">Contact</a>
+        </nav>
+    </header>
+    <main>
+        <section id="about">
+            <h2>About Me</h2>
+            <p>Your introduction here...</p>
+        </section>
+    </main>
+    <script src="script.js"></script>
+</body>
+</html>
+
+Step 3: Add Styling (styles.css)
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+}
+
+header {
+    background: #333;
+    color: white;
+    padding: 1rem;
+    text-align: center;
+}
+
+Step 4: Add Interactivity (script.js)
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Website loaded!');
+    // Add your JavaScript here
+});
+
+Step 5: Test Your Website
+Open index.html in a web browser to see your creation!
+
+Step 6: Deploy Online
+Use GitHub Pages, Netlify, or Vercel to share your website with the world.""",
+                estimated_time=180,
+                complexity=complexity,
+                interactive=False,
+                order=1
+            ),
+            TeachingModule(
+                module_id="web_003",
+                type=ModuleType.CODE_EXAMPLE,
+                title="Interactive Web Components",
+                content="""Example 1: Responsive Navigation Menu
+
+<nav class="navbar">
+    <div class="logo">MyBrand</div>
+    <ul class="nav-links">
+        <li><a href="#home">Home</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#services">Services</a></li>
+    </ul>
+</nav>
+
+CSS:
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    background: #2c3e50;
+}
+
+.nav-links {
+    display: flex;
+    list-style: none;
+    gap: 2rem;
+}
+
+
+Example 2: Form Validation
+
+<form id="contactForm">
+    <input type="email" id="email" placeholder="Your email" required>
+    <button type="submit">Submit</button>
+</form>
+
+JavaScript:
+document.getElementById('contactForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const email = document.getElementById('email').value;
+    if (email.includes('@')) {
+        alert('Thank you for subscribing!');
+    } else {
+        alert('Please enter a valid email');
+    }
+});
+
+
+Example 3: Dynamic Content Loading
+
+<button id="loadBtn">Load Data</button>
+<div id="content"></div>
+
+JavaScript:
+document.getElementById('loadBtn').addEventListener('click', async function() {
+    const response = await fetch('https://api.example.com/data');
+    const data = await response.json();
+    document.getElementById('content').innerHTML = data.message;
+});""",
+                estimated_time=150,
+                complexity=complexity,
+                interactive=True,
+                order=2
+            ),
+            TeachingModule(
+                module_id="web_004",
+                type=ModuleType.EXPLANATION,
+                title="Modern Web Development Best Practices",
+                content="""1. Semantic HTML
+Use meaningful tags: <header>, <nav>, <main>, <article>, <footer> instead of generic <div> tags.
+
+2. Mobile-First Design
+Design for mobile devices first, then enhance for larger screens using CSS media queries.
+
+3. Accessibility (a11y)
+• Use alt text for images
+• Ensure keyboard navigation works
+• Maintain good color contrast
+• Use ARIA labels when needed
+
+4. Performance Optimization
+• Minimize HTTP requests
+• Compress images and assets
+• Use lazy loading for images
+• Minify CSS and JavaScript
+
+5. Security Best Practices
+• Validate all user input
+• Use HTTPS
+• Implement Content Security Policy
+• Protect against XSS and CSRF attacks
+
+6. Version Control
+Use Git to track changes and collaborate with others.
+
+7. Testing
+Test across different browsers and devices to ensure compatibility.""",
+                estimated_time=90,
+                complexity=complexity,
+                interactive=False,
+                order=3
+            )
+        ]
+    
+    def _create_data_science_modules(self, query: str, complexity: ComplexityLevel) -> List[TeachingModule]:
+        """Create comprehensive data science educational modules"""
+        return [
+            TeachingModule(
+                module_id="ds_001",
+                type=ModuleType.EXPLANATION,
+                title="Introduction to Data Science",
+                content="""Data science is an interdisciplinary field that uses scientific methods, algorithms, and systems to extract knowledge and insights from structured and unstructured data.
+
+Core Components:
+
+1. Statistics & Mathematics
+• Probability theory
+• Statistical inference
+• Hypothesis testing
+• Linear algebra and calculus
+
+2. Programming & Tools
+• Python (NumPy, Pandas, Scikit-learn)
+• R for statistical computing
+• SQL for database queries
+• Jupyter notebooks for analysis
+
+3. Machine Learning
+• Supervised learning (classification, regression)
+• Unsupervised learning (clustering, dimensionality reduction)
+• Deep learning and neural networks
+• Model evaluation and validation
+
+4. Data Visualization
+• Matplotlib, Seaborn, Plotly
+• Tableau, Power BI
+• Storytelling with data
+• Interactive dashboards
+
+5. Domain Knowledge
+Understanding the business context and asking the right questions is crucial for meaningful analysis.
+
+Applications:
+• Healthcare: Disease prediction, drug discovery
+• Finance: Fraud detection, risk assessment
+• Marketing: Customer segmentation, recommendation systems
+• Technology: Natural language processing, computer vision""",
+                estimated_time=150,
+                complexity=complexity,
+                interactive=False,
+                order=0
+            ),
+            TeachingModule(
+                module_id="ds_002",
+                type=ModuleType.STEP_BY_STEP,
+                title="The Data Science Workflow",
+                content="""Step 1: Define the Problem
+• What question are you trying to answer?
+• What metrics will measure success?
+• What are the constraints and requirements?
+
+Step 2: Collect Data
+• Identify data sources (databases, APIs, web scraping)
+• Gather relevant datasets
+• Consider data quality and quantity
+• Ensure ethical data collection
+
+Step 3: Clean and Prepare Data
+• Handle missing values
+• Remove duplicates
+• Fix inconsistencies
+• Convert data types
+• Feature engineering: create new meaningful features
+
+Step 4: Exploratory Data Analysis (EDA)
+• Calculate summary statistics
+• Create visualizations (histograms, scatter plots, box plots)
+• Identify patterns and correlations
+• Detect outliers and anomalies
+
+Step 5: Model Building
+• Select appropriate algorithms
+• Split data into training and testing sets
+• Train models on training data
+• Tune hyperparameters
+• Validate with cross-validation
+
+Step 6: Evaluate and Interpret
+• Assess model performance (accuracy, precision, recall, F1-score)
+• Understand feature importance
+• Check for overfitting or underfitting
+• Interpret results in business context
+
+Step 7: Deploy and Monitor
+• Deploy model to production
+• Create APIs or dashboards
+• Monitor performance over time
+• Retrain as needed with new data""",
+                estimated_time=180,
+                complexity=complexity,
+                interactive=False,
+                order=1
+            ),
+            TeachingModule(
+                module_id="ds_003",
+                type=ModuleType.CODE_EXAMPLE,
+                title="Python Data Science Examples",
+                content="""Example 1: Data Analysis with Pandas
+
+import pandas as pd
+import numpy as np
+
+# Load data
+df = pd.read_csv('sales_data.csv')
+
+# Basic exploration
+print(df.head())
+print(df.describe())
+print(df.info())
+
+# Data cleaning
+df = df.dropna()
+df['date'] = pd.to_datetime(df['date'])
+
+# Analysis
+monthly_sales = df.groupby(df['date'].dt.month)['sales'].sum()
+print(monthly_sales)
+
+
+Example 2: Data Visualization
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Create visualizations
+plt.figure(figsize=(10, 6))
+sns.barplot(x='month', y='sales', data=df)
+plt.title('Monthly Sales')
+plt.xlabel('Month')
+plt.ylabel('Sales ($)')
+plt.show()
+
+
+Example 3: Machine Learning Model
+
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Prepare data
+X = df[['feature1', 'feature2', 'feature3']]
+y = df['target']
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Train model
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+# Evaluate
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+print(f'MSE: {mse:.2f}')
+print(f'R² Score: {r2:.2f}')""",
+                estimated_time=180,
+                complexity=complexity,
+                interactive=True,
+                order=2
+            ),
+            TeachingModule(
+                module_id="ds_004",
+                type=ModuleType.EXPLANATION,
+                title="Data Science Best Practices",
+                content="""1. Start with Questions, Not Data
+Define clear objectives before diving into analysis. What decisions will this analysis inform?
+
+2. Understand Your Data
+• Know the source and collection method
+• Understand each variable's meaning
+• Check for biases in the data
+• Document data lineage
+
+3. Reproducibility
+• Use version control (Git)
+• Document your process
+• Use virtual environments
+• Write clean, commented code
+• Create reproducible notebooks
+
+4. Validate Rigorously
+• Use proper train/test splits
+• Apply cross-validation
+• Test on unseen data
+• Check for data leakage
+• Validate assumptions
+
+5. Communicate Effectively
+• Create clear visualizations
+• Tell a story with your data
+• Explain technical concepts to non-technical audiences
+• Provide actionable insights
+• Document limitations
+
+6. Ethics and Privacy
+• Respect data privacy
+• Avoid algorithmic bias
+• Be transparent about limitations
+• Consider societal impact
+• Follow data protection regulations (GDPR, etc.)""",
+                estimated_time=120,
+                complexity=complexity,
+                interactive=False,
+                order=3
+            )
+        ]
+    
+    def _create_generic_modules(self, query: str, complexity: ComplexityLevel) -> List[TeachingModule]:
+        """Create comprehensive generic educational modules"""
+        return [
+            TeachingModule(
+                module_id="gen_001",
+                type=ModuleType.EXPLANATION,
+                title=f"Understanding {query[:50]}",
+                content=f"""Let's explore {query} in depth.
+
+What You'll Learn:
+This comprehensive guide will help you understand the fundamental concepts, practical applications, and best practices related to this topic.
+
+Key Learning Objectives:
+• Grasp the core principles and terminology
+• Understand real-world applications
+• Learn practical techniques and methods
+• Develop problem-solving skills
+• Build a strong foundation for advanced topics
+
+Why This Matters:
+Understanding {query} is valuable because it provides you with knowledge and skills that can be applied in various contexts. Whether you're learning for personal growth, career advancement, or academic purposes, this topic offers important insights.
+
+Learning Approach:
+We'll break down complex concepts into manageable pieces, use clear examples, and provide step-by-step guidance to ensure you can follow along and apply what you learn.""",
+                estimated_time=120,
+                complexity=complexity,
+                interactive=False,
+                order=0
+            ),
+            TeachingModule(
+                module_id="gen_002",
+                type=ModuleType.STEP_BY_STEP,
+                title="Structured Learning Path",
+                content="""Step 1: Build Your Foundation
+Start with the fundamental concepts. Don't rush - take time to understand the basics thoroughly. Use multiple resources: articles, videos, tutorials, and hands-on practice.
+
+Step 2: Learn Through Examples
+Theory is important, but examples bring concepts to life. Look for real-world applications and case studies. Try to understand not just "what" but "why" and "how."
+
+Step 3: Practice Actively
+Active learning is more effective than passive reading. Take notes, create summaries in your own words, teach concepts to others, and work on practical exercises.
+
+Step 4: Apply Your Knowledge
+Find opportunities to use what you've learned in real situations. Start with small projects or problems, then gradually tackle more complex challenges.
+
+Step 5: Review and Reinforce
+Regularly revisit key concepts to strengthen your understanding. Use spaced repetition - review material at increasing intervals over time.
+
+Step 6: Explore Advanced Topics
+Once you're comfortable with the basics, dive deeper into specialized areas that interest you. Connect new knowledge to what you already know.
+
+Step 7: Stay Curious and Keep Learning
+Learning is a continuous journey. Stay updated with new developments, join communities, ask questions, and never stop exploring!""",
+                estimated_time=150,
+                complexity=complexity,
+                interactive=False,
+                order=1
+            ),
+            TeachingModule(
+                module_id="gen_003",
+                type=ModuleType.EXPLANATION,
+                title="Effective Learning Strategies",
+                content="""1. Active Recall
+Test yourself regularly instead of just re-reading material. This strengthens memory and identifies gaps in understanding.
+
+2. Spaced Repetition
+Review material at increasing intervals (1 day, 3 days, 1 week, 1 month). This technique dramatically improves long-term retention.
+
+3. Interleaving
+Mix different topics or types of problems rather than focusing on one thing at a time. This improves your ability to distinguish between concepts.
+
+4. Elaboration
+Explain concepts in your own words and connect them to things you already know. Ask yourself "why" and "how" questions.
+
+5. Concrete Examples
+Use specific examples to understand abstract concepts. Create your own examples to test understanding.
+
+6. Dual Coding
+Combine words with visuals. Draw diagrams, create mind maps, or use other visual representations alongside text.
+
+7. Metacognition
+Think about your thinking. Monitor your understanding, identify what you don't know, and adjust your learning strategies accordingly.
+
+8. Practice Testing
+Regular self-testing is one of the most effective learning techniques. Use flashcards, practice problems, or teach others.
+
+9. Break It Down
+Divide complex topics into smaller, manageable chunks. Master each piece before moving to the next.
+
+10. Stay Consistent
+Regular, shorter study sessions are more effective than occasional long cramming sessions. Build a sustainable learning routine.""",
+                estimated_time=120,
+                complexity=complexity,
+                interactive=False,
+                order=2
+            )
+        ]
+    
+    def _generate_related_concepts(self, query: str) -> List[str]:
+        """Generate related concepts based on query"""
+        query_lower = query.lower()
+        
+        if 'code' in query_lower or 'program' in query_lower:
+            return ["Variables", "Functions", "Loops", "Data Structures", "Algorithms"]
+        elif 'web' in query_lower:
+            return ["HTML", "CSS", "JavaScript", "Responsive Design", "APIs"]
+        elif 'data' in query_lower:
+            return ["Statistics", "Visualization", "Machine Learning", "Python", "Analysis"]
+        else:
+            return ["Fundamentals", "Best Practices", "Applications", "Tools", "Resources"]
     
     def _create_fallback_payload(self, request: RAGQueryRequest) -> KnowledgePayload:
         """Create fallback payload on error"""
