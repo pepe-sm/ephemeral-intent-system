@@ -162,10 +162,17 @@ export interface Session {
 
 export type WebSocketMessageType =
   | 'biometric_update'
+  | 'biometric_analysis'
+  | 'biometric_token'
   | 'user_query'
+  | 'knowledge_query'
+  | 'knowledge_payload'
   | 'engagement_signal'
   | 'ui_update'
+  | 'full_pipeline'
   | 'session_complete'
+  | 'ping'
+  | 'pong'
   | 'error';
 
 export interface WebSocketMessage {

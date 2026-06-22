@@ -26,8 +26,8 @@ export class WebSocketService {
   private ws: WebSocket | null = null;
   private config: Required<WebSocketServiceConfig>;
   private reconnectAttempts = 0;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private reconnectTimeout: number | null = null;
+  private heartbeatInterval: number | null = null;
   private messageHandlers: Set<MessageHandler> = new Set();
   private connectionHandlers: Set<ConnectionHandler> = new Set();
   private errorHandlers: Set<ErrorHandler> = new Set();

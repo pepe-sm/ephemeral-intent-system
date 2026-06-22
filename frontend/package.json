@@ -2,6 +2,7 @@
   "name": "ephemeral-intent-frontend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Frontend for Ephemeral Intent Synthesis System - IBM AI Builders Challenge",
   "scripts": {
     "dev": "vite",
