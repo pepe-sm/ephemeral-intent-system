@@ -216,8 +216,9 @@ export class WebSocketService {
     };
 
     this.ws.onerror = (event) => {
-      console.error('WebSocket error:', event);
-      this.handleError(new Error('WebSocket connection error'));
+      console.error('WebSocket error event:', event);
+      // Don't immediately show error to user - wait for onclose to handle reconnection
+      // Only show error if connection actually fails (handled in onclose)
     };
 
     this.ws.onclose = (event) => {
@@ -225,8 +226,15 @@ export class WebSocketService {
       this.clearHeartbeat();
       this.notifyConnectionHandlers(false);
 
+      // Only show error if this was an abnormal closure and we can't reconnect
       if (!this.isIntentionallyClosed) {
-        this.attemptReconnect();
+        if (event.code !== 1000 && event.code !== 1001) {
+          // Abnormal closure - attempt reconnect
+          this.attemptReconnect();
+        } else {
+          // Normal closure - just log it
+          console.log('WebSocket closed normally');
+        }
       }
     };
   }

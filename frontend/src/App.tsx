@@ -56,6 +56,8 @@ function App() {
     onUIUpdate: (componentTree) => {
       console.log('UI update received:', componentTree);
       setUIComponentTree(componentTree);
+      // Reset module index when new UI is received
+      setCurrentModuleIndex(0);
     },
     onSessionComplete: () => {
       console.log('Session complete');
@@ -88,9 +90,16 @@ function App() {
       // Send full pipeline request if we have a query
       if (query.trim()) {
         sendFullPipeline(query, landmarks, landmarks.length);
+        
+        // Set a timeout to detect if pipeline gets stuck
+        setTimeout(() => {
+          if (!uiComponentTree && !error) {
+            setError('Pipeline timeout - please try again or refresh the page');
+          }
+        }, 30000); // 30 second timeout
       }
     },
-    [query, sendFullPipeline, setIsCapturingBiometrics]
+    [query, sendFullPipeline, setIsCapturingBiometrics, uiComponentTree, error, setError]
   );
 
   // Handle query submission
@@ -260,6 +269,25 @@ function App() {
             </div>
           )}
 
+          {/* Loading State - Waiting for UI Generation */}
+          {knowledgePayload && !uiComponentTree && !isCapturingBiometrics && (
+            <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <h3 className="text-xl font-semibold text-gray-900">
+                  Generating Personalized Learning Experience
+                </h3>
+                <p className="text-gray-600">
+                  Adapting content based on your cognitive state...
+                </p>
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg flex items-center gap-2">
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
+                  <span className="text-sm text-blue-900">Voice guidance will be active</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Knowledge Display with Dynamic UI */}
           {knowledgePayload && uiComponentTree && (
             <div className="bg-white rounded-lg shadow-lg p-6">
@@ -274,7 +302,7 @@ function App() {
           )}
 
           {/* Progress Indicator */}
-          {knowledgePayload && (
+          {knowledgePayload && uiComponentTree && (
             <div className="mt-6 bg-white rounded-lg shadow-lg p-4">
               <div className="flex justify-between text-sm mb-2">
                 <span className="font-semibold">Learning Progress</span>
@@ -290,6 +318,23 @@ function App() {
                   }}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Retry Button for Stuck States */}
+          {error && error.includes('timeout') && (
+            <div className="mt-6 bg-white rounded-lg shadow-lg p-6 text-center">
+              <button
+                onClick={() => {
+                  setError(null);
+                  setUIComponentTree(null);
+                  setIsCapturingBiometrics(false);
+                  window.location.reload();
+                }}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+              >
+                Restart Session
+              </button>
             </div>
           )}
 

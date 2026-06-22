@@ -70,19 +70,26 @@ export const useAppStore = create<AppStore>()(
         // Complete a module
         completeModule: (moduleId: string) =>
           set((state) => {
-            if (!state.session) return state;
+            if (!state.session || !state.knowledgePayload) return state;
 
             const completedModules = [
               ...state.session.completed_modules,
               moduleId,
             ];
 
+            // Don't go beyond the last module
+            const totalModules = state.knowledgePayload.teaching_modules.length;
+            const nextIndex = Math.min(
+              state.currentModuleIndex + 1,
+              totalModules - 1
+            );
+
             return {
               session: {
                 ...state.session,
                 completed_modules: completedModules,
               },
-              currentModuleIndex: state.currentModuleIndex + 1,
+              currentModuleIndex: nextIndex,
             };
           }),
 

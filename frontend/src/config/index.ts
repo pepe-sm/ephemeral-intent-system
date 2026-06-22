@@ -19,9 +19,26 @@ const BACKEND_PORT = getEnvVar('VITE_BACKEND_PORT', '8000');
 const BACKEND_PROTOCOL = getEnvVar('VITE_BACKEND_PROTOCOL', 'http');
 const WS_PROTOCOL = getEnvVar('VITE_WS_PROTOCOL', 'ws');
 
+// In development, use relative URLs to leverage Vite's proxy
+// In production, use full URLs
+const getBackendUrl = () => {
+  if (isDevelopment) {
+    return ''; // Use relative URLs in development (Vite proxy)
+  }
+  return `${BACKEND_PROTOCOL}://${BACKEND_HOST}:${BACKEND_PORT}`;
+};
+
+const getWsUrl = () => {
+  if (isDevelopment) {
+    // Use relative WebSocket URL to leverage Vite's proxy
+    return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+  }
+  return `${WS_PROTOCOL}://${BACKEND_HOST}:${BACKEND_PORT}/ws`;
+};
+
 export const config: AppConfig = {
-  backend_url: `${BACKEND_PROTOCOL}://${BACKEND_HOST}:${BACKEND_PORT}`,
-  ws_url: `${WS_PROTOCOL}://${BACKEND_HOST}:${BACKEND_PORT}/ws`,
+  backend_url: getBackendUrl(),
+  ws_url: getWsUrl(),
   biometric_capture_duration: parseInt(getEnvVar('VITE_BIOMETRIC_DURATION', '3'), 10),
   biometric_fps: parseInt(getEnvVar('VITE_BIOMETRIC_FPS', '30'), 10),
   enable_voice_synthesis: getEnvVar('VITE_ENABLE_VOICE', 'false') === 'true',
@@ -47,6 +64,9 @@ export const WS_MESSAGE_TYPES = {
   KNOWLEDGE_PAYLOAD: 'knowledge_payload',
   UI_UPDATE: 'ui_update',
   SESSION_COMPLETE: 'session_complete',
+  PIPELINE_STATUS: 'pipeline_status',
+  PIPELINE_COMPLETE: 'pipeline_complete',
+  CONNECTION_ESTABLISHED: 'connection_established',
   ERROR: 'error',
   PING: 'ping',
   PONG: 'pong',

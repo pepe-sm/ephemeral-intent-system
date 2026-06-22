@@ -48,10 +48,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
   // Handle incoming messages
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
-      console.log('WebSocket message received:', message.type);
+      console.log('WebSocket message received:', message.type, message);
 
       switch (message.type) {
         case WS_MESSAGE_TYPES.BIOMETRIC_TOKEN:
+          console.log('Processing biometric token:', message.data);
           const biometricToken = message.data as BiometricToken;
           setBiometricToken(biometricToken);
           onBiometricToken?.(biometricToken);
@@ -59,6 +60,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
           break;
 
         case WS_MESSAGE_TYPES.KNOWLEDGE_PAYLOAD:
+          console.log('Processing knowledge payload:', message.data);
           const knowledgePayload = message.data as KnowledgePayload;
           setKnowledgePayload(knowledgePayload);
           onKnowledgePayload?.(knowledgePayload);
@@ -66,24 +68,44 @@ export function useWebSocket(options: UseWebSocketOptions) {
           break;
 
         case WS_MESSAGE_TYPES.UI_UPDATE:
+          console.log('Processing UI update:', message.data);
           const uiData = message.data as { component_tree: UIComponentTree };
+          if (!uiData.component_tree) {
+            console.error('UI update received but component_tree is missing!', message.data);
+            setError('Invalid UI configuration received');
+            return;
+          }
           onUIUpdate?.(uiData.component_tree);
           updateSessionStatus('active');
           break;
 
         case WS_MESSAGE_TYPES.SESSION_COMPLETE:
+          console.log('Session complete');
           onSessionComplete?.();
           updateSessionStatus('completing');
           break;
 
         case WS_MESSAGE_TYPES.ERROR:
           const errorMessage = message.data?.message || 'Unknown error occurred';
+          console.error('WebSocket error received:', errorMessage, message.data);
           setError(errorMessage);
           onError?.(new Error(errorMessage));
           break;
 
+        case WS_MESSAGE_TYPES.PIPELINE_STATUS:
+          console.log('Pipeline status update:', message);
+          break;
+
+        case WS_MESSAGE_TYPES.PIPELINE_COMPLETE:
+          console.log('Pipeline complete:', message);
+          break;
+
+        case WS_MESSAGE_TYPES.CONNECTION_ESTABLISHED:
+          console.log('Connection established:', message);
+          break;
+
         default:
-          console.warn('Unknown message type:', message.type);
+          console.warn('Unknown message type:', message.type, message);
       }
     },
     [

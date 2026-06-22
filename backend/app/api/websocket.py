@@ -113,9 +113,9 @@ async def handle_biometric_analysis(session_id: str, data: Dict[str, Any]):
         # Analyze
         token = analyzer.analyze(request)
         
-        # Send response
+        # Send response with correct message type
         await manager.send_message(session_id, {
-            "type": "biometric_analysis_result",
+            "type": "biometric_token",
             "data": {
                 "session_id": token.session_id,
                 "cognitive_load": token.cognitive_load.value,
@@ -159,35 +159,49 @@ async def handle_knowledge_query(session_id: str, data: Dict[str, Any], biometri
             complexity_preference=data.get("complexity_preference")
         )
         
+        logger.info(f"Querying RAG engine for: {request.query}")
+        
         # Query knowledge base
         response = await engine.query(request)
         
-        # Send response
+        logger.info(f"RAG response received - success: {response.success}, modules: {len(response.knowledge_payload.teaching_modules)}")
+        
+        # Check if response is valid
+        if not response.knowledge_payload or not response.knowledge_payload.teaching_modules:
+            logger.error(f"RAG returned empty knowledge payload for session {session_id}")
+            await manager.send_message(session_id, {
+                "type": "error",
+                "error": "empty_knowledge_payload",
+                "message": "Knowledge base returned no content. Please try a different query or check if the knowledge base is populated."
+            })
+            return None
+        
+        # Send response with correct message type
+        logger.info(f"Sending knowledge payload with {len(response.knowledge_payload.teaching_modules)} modules")
         await manager.send_message(session_id, {
-            "type": "knowledge_query_result",
+            "type": "knowledge_payload",
             "data": {
                 "session_id": response.session_id,
                 "success": response.success,
-                "knowledge_payload": {
-                    "core_concept": response.knowledge_payload.core_concept,
-                    "complexity_level": response.knowledge_payload.complexity_level.value,
-                    "teaching_modules": [
-                        {
-                            "module_id": m.module_id,
-                            "type": m.type.value,
-                            "title": m.title,
-                            "content": m.content,
-                            "estimated_time": m.estimated_time,
-                            "order": m.order
-                        }
-                        for m in response.knowledge_payload.teaching_modules
-                    ],
-                    "total_estimated_time": response.knowledge_payload.total_estimated_time
-                },
+                "core_concept": response.knowledge_payload.core_concept,
+                "complexity_level": response.knowledge_payload.complexity_level.value,
+                "teaching_modules": [
+                    {
+                        "module_id": m.module_id,
+                        "type": m.type.value,
+                        "title": m.title,
+                        "content": m.content,
+                        "estimated_time": m.estimated_time,
+                        "order": m.order
+                    }
+                    for m in response.knowledge_payload.teaching_modules
+                ],
+                "total_estimated_time": response.knowledge_payload.total_estimated_time,
                 "processing_time_ms": response.processing_time_ms
             }
         })
         
+        logger.info(f"Knowledge payload sent successfully for session {session_id}")
         return response.knowledge_payload
         
     except Exception as e:
@@ -203,16 +217,32 @@ async def handle_knowledge_query(session_id: str, data: Dict[str, Any], biometri
 async def handle_ui_orchestration(session_id: str, biometric_token, knowledge_payload):
     """Handle UI orchestration request"""
     try:
+        logger.info(f"UI orchestration handler called for session {session_id}")
         orchestrator = get_ui_orchestrator()
+        logger.info(f"UI orchestrator obtained for session {session_id}")
         
         # Orchestrate UI
+        logger.info(f"Calling orchestrator.orchestrate for session {session_id}")
         ui_config = orchestrator.orchestrate(biometric_token, knowledge_payload)
+        logger.info(f"Orchestrator returned config for session {session_id}: {ui_config is not None}")
         
-        # Send response
+        # Restructure to match frontend expectations
+        # Frontend expects: { root: {...}, presentation_config: {...} }
+        component_tree_data = {
+            "root": ui_config.get("component_tree", {}),
+            "presentation_config": ui_config.get("presentation_config", {})
+        }
+        
+        # Send response with correct message type and structure
+        logger.info(f"Sending UI update message for session {session_id}")
+        logger.info(f"Component tree data keys: {component_tree_data.keys()}")
         await manager.send_message(session_id, {
-            "type": "ui_orchestration_result",
-            "data": ui_config
+            "type": "ui_update",
+            "data": {
+                "component_tree": component_tree_data
+            }
         })
+        logger.info(f"UI update message sent successfully for session {session_id}")
         
         return ui_config
         
@@ -236,7 +266,14 @@ async def handle_full_pipeline(session_id: str, data: Dict[str, Any]):
             "status": "processing"
         })
         
-        biometric_token = await handle_biometric_analysis(session_id, data.get("biometric", {}))
+        # Extract biometric data from flat structure
+        biometric_data = {
+            "landmarks": data.get("landmarks", []),
+            "frame_count": data.get("frame_count", 0),
+            "capture_duration": data.get("capture_duration", 0.0)
+        }
+        
+        biometric_token = await handle_biometric_analysis(session_id, biometric_data)
         if not biometric_token:
             return
         
@@ -247,15 +284,29 @@ async def handle_full_pipeline(session_id: str, data: Dict[str, Any]):
             "status": "processing"
         })
         
+        # Extract query data from flat structure
+        query_data = {
+            "query": data.get("query", ""),
+            "session_id": session_id
+        }
+        
         knowledge_payload = await handle_knowledge_query(
             session_id,
-            data.get("query", {}),
+            query_data,
             biometric_token
         )
         if not knowledge_payload:
+            # Send error message to frontend
+            await manager.send_message(session_id, {
+                "type": "error",
+                "error": "knowledge_query_failed",
+                "message": "Failed to generate knowledge payload. The knowledge base may be empty or the query failed."
+            })
+            logger.error(f"Knowledge query returned None for session {session_id}")
             return
         
         # Step 3: UI Orchestration
+        logger.info(f"Starting UI orchestration for session {session_id}")
         await manager.send_message(session_id, {
             "type": "pipeline_status",
             "step": "ui_orchestration",
@@ -263,7 +314,15 @@ async def handle_full_pipeline(session_id: str, data: Dict[str, Any]):
         })
         
         ui_config = await handle_ui_orchestration(session_id, biometric_token, knowledge_payload)
+        logger.info(f"UI orchestration completed for session {session_id}, config: {ui_config is not None}")
         if not ui_config:
+            # Send error message to frontend
+            await manager.send_message(session_id, {
+                "type": "error",
+                "error": "ui_orchestration_failed",
+                "message": "Failed to generate UI configuration."
+            })
+            logger.error(f"UI orchestration returned None for session {session_id}")
             return
         
         # Pipeline complete
