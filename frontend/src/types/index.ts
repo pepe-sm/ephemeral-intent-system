@@ -4,6 +4,20 @@
  */
 
 // ============================================================================
+// Student Lab Registration Types
+// ============================================================================
+
+export interface StudentRegistration {
+  studentId: string;
+  fullName: string;
+  labGroup: string;
+  course: string;
+  registeredAt: string;
+}
+
+export type LabView = 'register' | 'topic' | 'learning' | 'complete';
+
+// ============================================================================
 // Biometric Types
 // ============================================================================
 

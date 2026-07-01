@@ -3,11 +3,16 @@ FastAPI Main Application Entry Point
 Ephemeral Intent Synthesis System
 """
 
+# Load .env before anything else so every os.getenv() call sees the values
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, Any
 import os
@@ -23,6 +28,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _warm_up_services():
+    """Pre-load heavy services (embeddings model, ChromaDB) in a background thread.
+    This prevents the first WebSocket connection from timing out waiting for them."""
+    try:
+        logger.info("⏳ Pre-loading RAG engine (embeddings + vector store)…")
+        from app.api.websocket import get_rag_engine
+        get_rag_engine()
+        logger.info("✅ RAG engine ready")
+    except Exception as exc:
+        logger.error(f"⚠️  RAG engine warm-up failed: {exc}")
+
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,12 +48,15 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Ephemeral Intent Synthesis System...")
     logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"API Host: {os.getenv('API_HOST', '0.0.0.0')}:{os.getenv('API_PORT', '8000')}")
-    
-    # Initialize services (lazy loading)
-    app.state.services_initialized = False
-    
+
+    # Kick off heavy service initialisation in the background so the server
+    # starts accepting connections immediately.  The first WS client that
+    # arrives before warm-up finishes gets a friendly "not ready" message.
+    t = threading.Thread(target=_warm_up_services, daemon=True)
+    t.start()
+
     yield
-    
+
     # Shutdown
     logger.info("🛑 Shutting down Ephemeral Intent Synthesis System...")
 

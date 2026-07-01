@@ -22,6 +22,7 @@ interface UseWebSocketOptions {
   onKnowledgePayload?: (payload: KnowledgePayload) => void;
   onUIUpdate?: (componentTree: UIComponentTree) => void;
   onSessionComplete?: () => void;
+  onPipelineStatus?: (step: string, status: string) => void;
   onError?: (error: Error) => void;
 }
 
@@ -33,6 +34,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     onKnowledgePayload,
     onUIUpdate,
     onSessionComplete,
+    onPipelineStatus,
     onError,
   } = options;
 
@@ -94,6 +96,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
         case WS_MESSAGE_TYPES.PIPELINE_STATUS:
           console.log('Pipeline status update:', message);
+          if (message.data?.status === 'warming_up') {
+            setError('⏳ Server is loading AI models — please wait a moment, then try again.');
+          }
+          onPipelineStatus?.(message.data?.step ?? '', message.data?.status ?? '');
           break;
 
         case WS_MESSAGE_TYPES.PIPELINE_COMPLETE:
@@ -117,6 +123,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       onKnowledgePayload,
       onUIUpdate,
       onSessionComplete,
+      onPipelineStatus,
       onError,
     ]
   );
@@ -150,6 +157,31 @@ export function useWebSocket(options: UseWebSocketOptions) {
     wsService.connect(sessionId);
   }, [sessionId]);
 
+  // Ensure the socket is open, reconnecting from scratch if needed.
+  // Returns a Promise that resolves once connected (or rejects on timeout).
+  const ensureConnected = useCallback((): Promise<void> => {
+    const wsService = wsServiceRef.current;
+    if (wsService.isConnected()) return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        unsubscribe();
+        reject(new Error('Could not connect to server — is the backend running?'));
+      }, 10_000);
+
+      const unsubscribe = wsService.onConnection((connected) => {
+        if (connected) {
+          clearTimeout(timeout);
+          unsubscribe();
+          resolve();
+        }
+      });
+
+      // Force a clean reconnect (resets exhausted retry counter)
+      wsService.reconnect(sessionId);
+    });
+  }, [sessionId]);
+
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
     const wsService = wsServiceRef.current;
@@ -175,14 +207,22 @@ export function useWebSocket(options: UseWebSocketOptions) {
     [sessionId]
   );
 
-  // Send full pipeline request
+  // Send full pipeline request — reconnects automatically if socket is closed
   const sendFullPipeline = useCallback(
-    (query: string, landmarks: FaceLandmark[][], frameCount: number) => {
+    async (query: string, landmarks: FaceLandmark[][], frameCount: number) => {
       const wsService = wsServiceRef.current;
+      if (!wsService.isConnected()) {
+        try {
+          await ensureConnected();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Connection failed');
+          return;
+        }
+      }
       wsService.sendFullPipeline(sessionId, query, landmarks, frameCount);
       updateSessionStatus('capturing_biometrics');
     },
-    [sessionId, updateSessionStatus]
+    [sessionId, updateSessionStatus, ensureConnected, setError]
   );
 
   // Send engagement signal
@@ -225,6 +265,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
   return {
     connect,
     disconnect,
+    ensureConnected,
     sendBiometricData,
     sendKnowledgeQuery,
     sendFullPipeline,

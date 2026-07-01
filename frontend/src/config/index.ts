@@ -103,15 +103,18 @@ export const ENV = {
 
 // Validate configuration
 export function validateConfig(): boolean {
-  const required = ['backend_url', 'ws_url'];
-  
+  // In development, backend_url is intentionally empty (Vite proxy handles routing)
+  // Only require ws_url to be set
+  const required: (keyof AppConfig)[] = isDevelopment ? ['ws_url'] : ['backend_url', 'ws_url'];
+
   for (const key of required) {
-    if (!config[key as keyof AppConfig]) {
+    const value = config[key];
+    if (value === undefined || value === null) {
       console.error(`Missing required config: ${key}`);
       return false;
     }
   }
-  
+
   return true;
 }
 

@@ -79,12 +79,21 @@ def get_biometric_analyzer() -> BiometricAnalyzer:
 
 
 def get_rag_engine() -> RAGEngine:
-    """Get or create RAG engine instance"""
+    """Get or create RAG engine instance.
+    NOTE: first call blocks while loading embeddings model + ChromaDB (~30 s).
+    main.py kicks this off in a background thread at startup so it is usually
+    ready by the time the first browser connection arrives.
+    """
     global rag_engine
     if rag_engine is None:
         rag_engine = RAGEngine()
         logger.info("RAGEngine initialized")
     return rag_engine
+
+
+def is_rag_ready() -> bool:
+    """Return True once the RAGEngine singleton has been created."""
+    return rag_engine is not None
 
 
 def get_ui_orchestrator() -> UIOrchestrator:
@@ -351,8 +360,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     - Full pipeline execution
     """
     await manager.connect(websocket, session_id)
-    
+
     try:
+        # If the RAG engine hasn't finished loading yet, tell the client and
+        # keep the connection open so it can retry without reconnecting.
+        if not is_rag_ready():
+            await manager.send_message(session_id, {
+                "type": "pipeline_status",
+                "step": "startup",
+                "status": "warming_up",
+                "message": "Server is loading AI models, please wait a few seconds and try again."
+            })
+
         # Send welcome message
         await manager.send_message(session_id, {
             "type": "connection_established",

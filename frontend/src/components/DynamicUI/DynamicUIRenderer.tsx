@@ -36,7 +36,7 @@ export const DynamicUIRenderer: React.FC<DynamicUIRendererProps> = ({
   const [isPaused, setIsPaused] = useState(false);
 
   // Check if this is the last module
-  const isLastModule = componentTree.metadata?.current_module === componentTree.metadata?.total_modules;
+  const isLastModule = (componentTree as any).metadata?.current_module === (componentTree as any).metadata?.total_modules;
 
   // Initialize voice narration
   useEffect(() => {

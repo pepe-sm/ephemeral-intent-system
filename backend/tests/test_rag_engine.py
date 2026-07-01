@@ -17,7 +17,7 @@ from app.models.knowledge_payload import (
     ComplexityLevel,
     ModuleType
 )
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 
 class TestRAGEngineInitialization:
@@ -102,15 +102,15 @@ class TestRAGEngineQuery:
     
     @pytest.mark.asyncio
     async def test_query_error_handling(self, engine):
-        """Test query error handling"""
-        # Create invalid request
+        """Test that an empty query still returns a fallback response"""
+        # max_sources must be >= 1 per model validation; use minimum valid value
         request = RAGQueryRequest(
             session_id="error_test",
-            query="",  # Empty query
-            max_sources=0  # Invalid max_sources
+            query="",  # Empty query — engine should gracefully return fallback
+            max_sources=1
         )
-        
-        # Should still return a response with fallback
+
+        # Should still return a response with fallback payload
         response = await engine.query(request)
         assert isinstance(response, RAGQueryResponse)
         assert response.knowledge_payload is not None
@@ -141,9 +141,10 @@ class TestDocumentRetrieval:
     @pytest.mark.asyncio
     async def test_retrieve_documents_empty_store(self, engine):
         """Test document retrieval from empty vector store"""
+        # Clear any documents persisted from previous test runs before checking
+        engine.clear_vector_store()
         docs = await engine._retrieve_documents("test query", max_results=5)
         assert isinstance(docs, list)
-        # Empty store returns empty list
         assert len(docs) == 0
     
     def test_add_documents(self, engine, sample_documents):

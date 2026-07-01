@@ -273,6 +273,24 @@ export class WebSocketService {
     }, this.config.reconnectInterval);
   }
 
+  /**
+   * Force a fresh connection, resetting the reconnect counter.
+   * Call this when the user explicitly requests an action after the socket
+   * had previously exhausted its auto-reconnect attempts.
+   */
+  reconnect(sessionId: string): void {
+    this.clearReconnectTimeout();
+    this.clearHeartbeat();
+    if (this.ws) {
+      this.isIntentionallyClosed = true;
+      this.ws.close();
+      this.ws = null;
+    }
+    this.reconnectAttempts = 0;
+    this.isIntentionallyClosed = false;
+    this.connect(sessionId);
+  }
+
   private startHeartbeat(): void {
     this.clearHeartbeat();
     this.heartbeatInterval = setInterval(() => {

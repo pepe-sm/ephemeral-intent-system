@@ -11,9 +11,16 @@ import type {
   BiometricToken,
   KnowledgePayload,
   AppState,
+  StudentRegistration,
+  LabView,
 } from '@/types';
 
 interface AppStore extends AppState {
+  // Student registration
+  student: StudentRegistration | null;
+  setStudent: (student: StudentRegistration | null) => void;
+  labView: LabView;
+  setLabView: (view: LabView) => void;
   // Actions
   reset: () => void;
   completeModule: (moduleId: string) => void;
@@ -27,6 +34,8 @@ const initialState = {
   currentModuleIndex: 0,
   wsConnected: false,
   error: null,
+  student: null,
+  labView: 'register' as LabView,
 };
 
 export const useAppStore = create<AppStore>()(
@@ -34,6 +43,10 @@ export const useAppStore = create<AppStore>()(
     persist(
       (set, get) => ({
         ...initialState,
+
+        // Student registration
+        setStudent: (student: StudentRegistration | null) => set({ student }),
+        setLabView: (labView: LabView) => set({ labView }),
 
         // Session management
         setSession: (session: Session | null) => set({ session }),
@@ -99,8 +112,10 @@ export const useAppStore = create<AppStore>()(
       {
         name: 'ephemeral-intent-storage',
         partialize: (state) => ({
-          // Only persist session data, not transient UI state
+          // Persist session and student registration across page refreshes
           session: state.session,
+          student: state.student,
+          labView: state.labView,
         }),
       }
     ),

@@ -18,10 +18,20 @@ except ImportError:
     APIClient = None  # type: ignore
     Credentials = None  # type: ignore
     ModelInference = None  # type: ignore
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores.chroma import Chroma
-from langchain.docstore.document import Document
+
+try:
+    import ollama
+    from langchain_ollama import OllamaLLM
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    ollama = None  # type: ignore
+    OllamaLLM = None  # type: ignore
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
 
 from ..models.knowledge_payload import (
     KnowledgePayload,
@@ -48,10 +58,13 @@ class RAGEngine:
         watsonx_project_id: Optional[str] = None,
         watsonx_url: Optional[str] = None,
         vector_store_path: str = "./chroma_db",
-        model_id: str = "ibm/granite-13b-chat-v2"
+        model_id: str = "ibm/granite-13b-chat-v2",
+        use_ollama: Optional[bool] = None,
+        ollama_model: Optional[str] = None,
+        ollama_base_url: Optional[str] = None
     ):
         """
-        Initialize RAG Engine with IBM watsonx.ai credentials
+        Initialize RAG Engine with IBM watsonx.ai or Ollama
         
         Args:
             watsonx_api_key: IBM Cloud API key
@@ -59,18 +72,31 @@ class RAGEngine:
             watsonx_url: watsonx.ai API URL
             vector_store_path: Path to ChromaDB storage
             model_id: watsonx.ai model identifier
+            use_ollama: Use Ollama instead of watsonx.ai
+            ollama_model: Ollama model name (e.g., 'llama3.2', 'codellama:7b')
+            ollama_base_url: Ollama API base URL
         """
-        # Get credentials from environment if not provided
+        # Determine which LLM provider to use
+        self.use_ollama = use_ollama if use_ollama is not None else os.getenv("USE_OLLAMA", "false").lower() == "true"
+        self.ollama_model = ollama_model or os.getenv("OLLAMA_MODEL", "llama3.2")
+        self.ollama_base_url = ollama_base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        
+        # Get watsonx credentials from environment if not provided
         self.api_key = watsonx_api_key or os.getenv("WATSONX_API_KEY")
         self.project_id = watsonx_project_id or os.getenv("WATSONX_PROJECT_ID")
         self.url = watsonx_url or os.getenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
         
-        if not self.api_key or not self.project_id:
-            logger.warning("IBM watsonx.ai credentials not configured. RAG engine will use mock mode.")
-            self.mock_mode = True
-        else:
-            self.mock_mode = False
+        # Initialize the appropriate LLM provider
+        self.mock_mode = False
+        self.llm_provider = None
+        
+        if self.use_ollama:
+            self._initialize_ollama()
+        elif self.api_key and self.project_id:
             self._initialize_watsonx()
+        else:
+            logger.warning("No LLM provider configured. RAG engine will use mock mode.")
+            self.mock_mode = True
         
         self.model_id = model_id
         self.vector_store_path = vector_store_path
@@ -90,7 +116,10 @@ class RAGEngine:
         # Initialize or load vector store
         self._initialize_vector_store()
         
-        logger.info(f"RAGEngine initialized (mock_mode={self.mock_mode})")
+        if self.mock_mode:
+            logger.info("RAGEngine initialized in MOCK mode (no LLM provider)")
+        else:
+            logger.info(f"RAGEngine initialized with {self.llm_provider} provider (model: {self.ollama_model if self.llm_provider == 'ollama' else self.model_id})")
     
     def _initialize_watsonx(self):
         """Initialize IBM watsonx.ai client"""
@@ -114,10 +143,58 @@ class RAGEngine:
                 project_id=self.project_id or ""
             )
             
+            self.llm_provider = "watsonx"
             logger.info("IBM watsonx.ai client initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize watsonx.ai: {e}")
+            self.mock_mode = True
+    
+    def _initialize_ollama(self):
+        """Initialize Ollama client"""
+        if not OLLAMA_AVAILABLE or not ollama or not OllamaLLM:
+            logger.warning("Ollama SDK not available. Install with: pip install ollama langchain-ollama")
+            self.mock_mode = True
+            return
+            
+        try:
+            # Test Ollama connection
+            client = ollama.Client(host=self.ollama_base_url)
+            response = client.list()
+
+            # `response` is a ListResponse object; models are accessed via .models
+            # Each model has a .model attribute (e.g. "llama3.2:latest")
+            available_models = [m.model for m in getattr(response, 'models', [])]
+            logger.info(f"Ollama available models: {available_models}")
+
+            # Check if requested model is available (match by prefix so "llama3.2" matches "llama3.2:latest")
+            if not any(self.ollama_model in model for model in available_models):
+                logger.warning(f"Model '{self.ollama_model}' not found. Available: {available_models}")
+                logger.info(f"Attempting to pull model '{self.ollama_model}'...")
+                try:
+                    client.pull(self.ollama_model)
+                    logger.info(f"Successfully pulled model '{self.ollama_model}'")
+                except Exception as pull_error:
+                    logger.error(f"Failed to pull model: {pull_error}")
+                    self.mock_mode = True
+                    return
+            
+            # Initialize LangChain Ollama LLM
+            # num_predict caps output tokens so responses arrive in ~15-30 s
+            self.ollama_llm = OllamaLLM(
+                model=self.ollama_model,
+                base_url=self.ollama_base_url,
+                temperature=0.7,
+                num_predict=512,
+            )
+            
+            self.llm_provider = "ollama"
+            logger.info(f"Ollama client initialized successfully with model '{self.ollama_model}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Ollama: {e}")
+            logger.error(f"Make sure Ollama is running at {self.ollama_base_url}")
+            logger.error("Start Ollama with: ollama serve")
             self.mock_mode = True
     
     def _initialize_vector_store(self):
@@ -235,7 +312,9 @@ class RAGEngine:
         Returns:
             Structured KnowledgePayload
         """
-        if self.mock_mode or not documents:
+        # Use mock only when no LLM is configured — empty vector store is fine,
+        # Ollama can answer from its own knowledge without retrieved context.
+        if self.mock_mode:
             return self._create_mock_payload(query, session_id, complexity_preference)
         
         try:
@@ -294,46 +373,54 @@ class RAGEngine:
         context: str,
         complexity: ComplexityLevel
     ) -> List[TeachingModule]:
-        """Generate teaching modules using watsonx.ai"""
+        """Generate teaching modules using configured LLM (watsonx.ai or Ollama)"""
         
-        prompt = f"""Based on the following context, create a structured teaching response for this question: "{query}"
+        # Keep the prompt short to minimise token generation time.
+        # Context is included only when available (non-empty vector store).
+        context_section = f"\nContext:\n{context[:1000]}\n" if context.strip() else ""
+        prompt = f"""You are a concise teaching assistant. Answer this student question at {complexity.value} level.
 
-Context:
-{context[:2000]}  # Limit context length
+Question: {query}{context_section}
+Write exactly 2 short teaching modules. Use this exact format:
 
-Create 2-3 teaching modules that:
-1. Explain the core concept clearly
-2. Provide practical examples
-3. Match {complexity.value} complexity level
+MODULE 1
+Title: <title>
+Content: <2-3 sentence explanation>
+Type: explanation
 
-Format each module with:
-- Title
-- Content (2-3 paragraphs)
-- Type (explanation, code_example, or step_by_step)
-- Estimated time in seconds
-
-Respond in a structured format."""
+MODULE 2
+Title: <title>
+Content: <2-3 sentence explanation with example>
+Type: code_example"""
 
         try:
-            # Generate response using watsonx.ai
-            response = self.model.generate_text(
-                prompt=prompt,
-                params={
-                    "max_new_tokens": 1000,
-                    "temperature": 0.7,
-                    "top_p": 0.9
-                }
-            )
-            
-            # Convert response to string if needed
-            response_text = str(response) if not isinstance(response, str) else response
+            if self.llm_provider == "ollama":
+                # Generate response using Ollama
+                response_text = await asyncio.to_thread(
+                    self.ollama_llm.invoke,
+                    prompt
+                )
+            elif self.llm_provider == "watsonx":
+                # Generate response using watsonx.ai
+                response = self.model.generate_text(
+                    prompt=prompt,
+                    params={
+                        "max_new_tokens": 1000,
+                        "temperature": 0.7,
+                        "top_p": 0.9
+                    }
+                )
+                response_text = str(response) if not isinstance(response, str) else response
+            else:
+                # Fallback to default modules
+                return self._create_default_modules(query, complexity)
             
             # Parse response into modules (simplified for POC)
             modules = self._parse_modules_from_response(response_text, complexity)
             return modules
             
         except Exception as e:
-            logger.error(f"Error generating modules: {e}")
+            logger.error(f"Error generating modules with {self.llm_provider}: {e}")
             return self._create_default_modules(query, complexity)
     
     def _parse_modules_from_response(
@@ -341,26 +428,71 @@ Respond in a structured format."""
         response: str,
         complexity: ComplexityLevel
     ) -> List[TeachingModule]:
-        """Parse watsonx.ai response into teaching modules"""
-        # Simplified parsing for POC
-        # In production, use more sophisticated parsing or structured output
-        
-        modules = []
-        sections = response.split("\n\n")
-        
-        for i, section in enumerate(sections[:3]):  # Max 3 modules
-            if len(section.strip()) > 50:
+        """Parse LLM response into TeachingModule objects.
+
+        Understands the structured format:
+            MODULE N
+            Title: ...
+            Content: ...
+            Type: explanation|code_example|step_by_step
+        Falls back to splitting on blank lines for any other format.
+        """
+        import re
+
+        modules: List[TeachingModule] = []
+
+        # Try structured MODULE N ... blocks first
+        blocks = re.split(r'\bMODULE\s+\d+\b', response, flags=re.IGNORECASE)
+        blocks = [b.strip() for b in blocks if b.strip()]
+
+        type_map = {
+            "explanation": ModuleType.EXPLANATION,
+            "code_example": ModuleType.CODE_EXAMPLE,
+            "step_by_step": ModuleType.STEP_BY_STEP,
+            "interactive_demo": ModuleType.INTERACTIVE_DEMO,
+            "quick_reference": ModuleType.QUICK_REFERENCE,
+            "visual_diagram": ModuleType.VISUAL_DIAGRAM,
+        }
+
+        for i, block in enumerate(blocks[:3]):
+            title_m = re.search(r'Title:\s*(.+)', block, re.IGNORECASE)
+            content_m = re.search(r'Content:\s*(.+?)(?=Type:|$)', block, re.IGNORECASE | re.DOTALL)
+            type_m = re.search(r'Type:\s*(\w+)', block, re.IGNORECASE)
+
+            title = title_m.group(1).strip() if title_m else f"Module {i + 1}"
+            content = content_m.group(1).strip() if content_m else block.strip()
+            mod_type_str = type_m.group(1).lower() if type_m else ("explanation" if i == 0 else "code_example")
+            mod_type = type_map.get(mod_type_str, ModuleType.EXPLANATION if i == 0 else ModuleType.CODE_EXAMPLE)
+
+            if len(content) > 20:
                 modules.append(TeachingModule(
-                    module_id=f"mod_{i+1:03d}",
-                    type=ModuleType.EXPLANATION if i == 0 else ModuleType.CODE_EXAMPLE,
-                    title=f"Module {i+1}",
-                    content=section.strip(),
+                    module_id=f"mod_{i + 1:03d}",
+                    type=mod_type,
+                    title=title,
+                    content=content,
                     estimated_time=60 + (i * 30),
                     complexity=complexity,
                     interactive=i > 0,
-                    order=i
+                    order=i,
                 ))
-        
+
+        if modules:
+            return modules
+
+        # Fallback: split on blank lines
+        sections = [s.strip() for s in response.split("\n\n") if len(s.strip()) > 50]
+        for i, section in enumerate(sections[:3]):
+            modules.append(TeachingModule(
+                module_id=f"mod_{i + 1:03d}",
+                type=ModuleType.EXPLANATION if i == 0 else ModuleType.CODE_EXAMPLE,
+                title=f"Module {i + 1}",
+                content=section,
+                estimated_time=60 + (i * 30),
+                complexity=complexity,
+                interactive=i > 0,
+                order=i,
+            ))
+
         return modules if modules else self._create_default_modules("", complexity)
     
     def _create_default_modules(
