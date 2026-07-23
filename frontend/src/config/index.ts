@@ -67,6 +67,7 @@ export const WS_MESSAGE_TYPES = {
   SESSION_COMPLETE: 'session_complete',
   PIPELINE_STATUS: 'pipeline_status',
   PIPELINE_COMPLETE: 'pipeline_complete',
+  VIDEO_READY: 'video_ready',
   CONNECTION_ESTABLISHED: 'connection_established',
   ERROR: 'error',
   PING: 'ping',

@@ -118,7 +118,11 @@ export const useAppStore = create<AppStore>()(
         // has a usable entry point.
         rehydrate: () =>
           set((state) => {
-            if (state.labView === 'learning' || state.labView === 'complete') {
+            if (
+              state.labView === 'learning' ||
+              state.labView === 'complete' ||
+              state.labView === 'resources'
+            ) {
               return { labView: state.student ? ('topic' as LabView) : ('register' as LabView) };
             }
             return {};

@@ -1479,31 +1479,98 @@ Regular, shorter study sessions are more effective than occasional long cramming
             request.complexity_preference
         )
     
-    def add_documents(self, documents: List[Document]):
+    def add_documents(self, documents: List[Document]) -> int:
         """
-        Add documents to vector store
-        
-        Args:
-            documents: List of documents to add
+        Add documents to the vector store.
+
+        Each document is split into chunks before being embedded.  The
+        ``source_id`` metadata key is used as a stable identifier so the
+        same resource can be deleted later by ID.
+
+        Returns:
+            Number of chunks added.
         """
         try:
-            # Split documents into chunks
-            chunks = []
+            chunks: List[Document] = []
             for doc in documents:
                 doc_chunks = self.text_splitter.split_documents([doc])
                 chunks.extend(doc_chunks)
-            
-            # Add to vector store
+
             self.vector_store.add_documents(chunks)
-            self.vector_store.persist()
-            
-            logger.info(f"Added {len(chunks)} document chunks to vector store")
-            
+            # persist() is a no-op on newer chromadb but harmless to call
+            try:
+                self.vector_store.persist()
+            except Exception:
+                pass
+
+            logger.info(f"Added {len(chunks)} chunks from {len(documents)} document(s) to vector store")
+            return len(chunks)
+
         except Exception as e:
             logger.error(f"Error adding documents: {e}")
-    
+            raise
+
+    def list_resources(self) -> List[Dict[str, Any]]:
+        """
+        Return a summary of every unique source_id stored in the vector store.
+
+        Each entry contains:
+            id          — the source_id set when the resource was ingested
+            title       — human-readable title (from metadata or derived)
+            chunk_count — number of chunks belonging to this source
+            source_url  — optional URL (may be None)
+        """
+        try:
+            col = self.vector_store._collection  # chromadb Collection object
+            result = col.get(include=["metadatas"])
+            metadatas: list = result.get("metadatas") or []
+
+            # Group chunks by source_id
+            seen: Dict[str, Dict[str, Any]] = {}
+            for meta in metadatas:
+                sid = meta.get("source_id") or meta.get("source") or "unknown"
+                if sid not in seen:
+                    seen[sid] = {
+                        "id": sid,
+                        "title": meta.get("title", sid),
+                        "source_url": meta.get("source_url"),
+                        "chunk_count": 0,
+                        "content_type": meta.get("content_type", "text"),
+                    }
+                seen[sid]["chunk_count"] += 1
+
+            return list(seen.values())
+
+        except Exception as e:
+            logger.error(f"Error listing resources: {e}")
+            return []
+
+    def delete_resource(self, source_id: str) -> int:
+        """
+        Delete all chunks whose ``source_id`` metadata equals *source_id*.
+
+        Returns:
+            Number of chunks deleted.
+        """
+        try:
+            col = self.vector_store._collection
+            result = col.get(include=["metadatas"])
+            ids_to_delete = [
+                doc_id
+                for doc_id, meta in zip(result["ids"], result.get("metadatas") or [])
+                if (meta or {}).get("source_id") == source_id
+            ]
+            if ids_to_delete:
+                col.delete(ids=ids_to_delete)
+                logger.info(f"Deleted {len(ids_to_delete)} chunks for source_id={source_id!r}")
+            return len(ids_to_delete)
+
+        except Exception as e:
+            logger.error(f"Error deleting resource {source_id!r}: {e}")
+            raise
+
     def clear_vector_store(self):
-        """Clear all documents from vector store"""
+        """Clear ALL documents from the vector store."""
         try:
             self.vector_store.delete_collection()
             self._initialize_vector_store()

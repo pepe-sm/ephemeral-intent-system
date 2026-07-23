@@ -7,14 +7,15 @@ Ephemeral Intent Synthesis System
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from contextlib import asynccontextmanager
 import logging
 import threading
+import uuid
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import os
 
 from app.api.websocket import websocket_endpoint
@@ -201,6 +202,139 @@ async def terminate_session(session_id: str) -> Dict[str, Any]:
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"terminated": True, "session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Resource ingestion endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/v1/resources/ingest", tags=["Resources"])
+async def ingest_resource(
+    title: str = Form(...),
+    source_url: str = Form(""),
+    text: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+) -> Dict[str, Any]:
+    """
+    Add a resource to the RAG knowledge base.
+
+    Accepts either:
+      - A plain-text/markdown body via the ``text`` form field.
+      - A file upload (.txt, .md, .pdf) via the ``file`` field.
+
+    Both can be sent together; if both are present both are ingested under
+    the same ``source_id``.
+    """
+    if not text and not file:
+        raise HTTPException(status_code=422, detail="Provide 'text' or a file upload.")
+
+    from langchain_core.documents import Document as LCDocument
+
+    source_id = str(uuid.uuid4())
+    base_meta = {
+        "source_id": source_id,
+        "title": title,
+        "source_url": source_url or None,
+        "ingested_at": datetime.utcnow().isoformat(),
+    }
+
+    docs: list = []
+
+    # -- plain text / markdown --
+    if text and text.strip():
+        docs.append(LCDocument(
+            page_content=text.strip(),
+            metadata={**base_meta, "content_type": "text"},
+        ))
+
+    # -- file upload --
+    if file:
+        filename = file.filename or ""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        if ext in ("txt", "md", ""):
+            raw = await file.read()
+            content = raw.decode("utf-8", errors="replace").strip()
+            if content:
+                docs.append(LCDocument(
+                    page_content=content,
+                    metadata={**base_meta, "content_type": ext or "text", "filename": filename},
+                ))
+
+        elif ext == "pdf":
+            try:
+                import pypdf  # type: ignore
+                import io
+                raw = await file.read()
+                reader = pypdf.PdfReader(io.BytesIO(raw))
+                pages = []
+                for i, page in enumerate(reader.pages):
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        pages.append(LCDocument(
+                            page_content=page_text.strip(),
+                            metadata={**base_meta, "content_type": "pdf",
+                                      "filename": filename, "page": i + 1},
+                        ))
+                docs.extend(pages)
+            except ImportError:
+                raise HTTPException(
+                    status_code=422,
+                    detail="PDF support requires pypdf. Install it: pip install pypdf",
+                )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported file type '.{ext}'. Use .txt, .md, or .pdf.",
+            )
+
+    if not docs:
+        raise HTTPException(status_code=422, detail="No extractable content found.")
+
+    engine = get_rag_engine()
+    chunk_count = engine.add_documents(docs)
+
+    return {
+        "source_id": source_id,
+        "title": title,
+        "chunks_added": chunk_count,
+        "documents_processed": len(docs),
+    }
+
+
+@app.get("/api/v1/resources", tags=["Resources"])
+async def list_resources() -> Dict[str, Any]:
+    """Return all resources currently indexed in the vector store."""
+    engine = get_rag_engine()
+    resources = engine.list_resources()
+    return {"resources": resources, "count": len(resources)}
+
+
+@app.delete("/api/v1/resources/{source_id}", tags=["Resources"])
+async def delete_resource(source_id: str) -> Dict[str, Any]:
+    """Remove all chunks for a given source_id from the vector store."""
+    engine = get_rag_engine()
+    deleted = engine.delete_resource(source_id)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Resource not found.")
+    return {"deleted": True, "source_id": source_id, "chunks_removed": deleted}
+
+
+# ---------------------------------------------------------------------------
+# Video file serving
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/video/{filename}", tags=["Video"])
+async def serve_video(filename: str) -> FileResponse:
+    """Serve a generated MP4 file from the video output directory."""
+    from pathlib import Path
+    video_dir = Path(os.getenv("VIDEO_OUTPUT_DIR", "./data/videos"))
+    # Sanitise — prevent path traversal
+    safe_name = Path(filename).name
+    video_path = video_dir / safe_name
+    if not video_path.exists() or video_path.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Video not found.")
+    return FileResponse(str(video_path), media_type="video/mp4")
 
 
 # ---------------------------------------------------------------------------

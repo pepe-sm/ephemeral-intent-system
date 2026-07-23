@@ -25,6 +25,7 @@ interface UseWebSocketOptions {
   onUIUpdate?: (componentTree: UIComponentTree) => void;
   onSessionComplete?: () => void;
   onPipelineStatus?: (step: string, status: string) => void;
+  onVideoReady?: (moduleId: string, videoUrl: string) => void;
   onError?: (error: Error) => void;
 }
 
@@ -113,6 +114,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
           }
           cb.onPipelineStatus?.(message.data?.step ?? '', message.data?.status ?? '');
           break;
+
+        case WS_MESSAGE_TYPES.VIDEO_READY: {
+          const { module_id, video_url } = message.data ?? {};
+          if (module_id && video_url) {
+            cb.onVideoReady?.(module_id, video_url);
+          }
+          break;
+        }
 
         case WS_MESSAGE_TYPES.PIPELINE_COMPLETE:
         case WS_MESSAGE_TYPES.CONNECTION_ESTABLISHED:

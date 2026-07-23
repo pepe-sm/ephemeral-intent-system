@@ -9,12 +9,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RegistrationPanel } from '@/components/RegistrationPanel';
 import { TopicPanel } from '@/components/TopicPanel';
+import { ResourcesPanel } from '@/components/ResourcesPanel';
+import { VideoPlayer } from '@/components/VideoPlayer';
 import { DynamicUIRenderer } from '@/components/DynamicUI/DynamicUIRenderer';
 import { useAppStore, selectCurrentModule } from '@/store/appStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { config } from '@/config';
 import type { UIComponentTree, StudentRegistration } from '@/types';
-import { Brain, Wifi, WifiOff, AlertCircle, CheckCircle, LogOut } from 'lucide-react';
+import { Brain, Wifi, WifiOff, AlertCircle, CheckCircle, LogOut, BookMarked } from 'lucide-react';
 
 function App() {
   const [sessionId] = useState(
@@ -24,6 +26,8 @@ function App() {
   const [streamedModules, setStreamedModules] = useState<import('@/types').TeachingModule[]>([]);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
+  // moduleId → video URL, populated as video_ready WS messages arrive
+  const [moduleVideos, setModuleVideos] = useState<Record<string, string>>({});
 
   const {
     session,
@@ -79,6 +83,9 @@ function App() {
         };
         setLoadingStep(labels[step] ?? 'Processing…');
       }
+    },
+    onVideoReady: (moduleId, videoUrl) => {
+      setModuleVideos(prev => ({ ...prev, [moduleId]: videoUrl }));
     },
     onError: (err) => {
       setError(err.message);
@@ -150,6 +157,7 @@ function App() {
   const handleNewTopic = useCallback(() => {
     setUIComponentTree(null);
     setStreamedModules([]);
+    setModuleVideos({});
     setIsLoadingContent(false);
     setError(null);
     setLabView('topic');
@@ -159,6 +167,7 @@ function App() {
     setStudent(null);
     setUIComponentTree(null);
     setStreamedModules([]);
+    setModuleVideos({});
     setIsLoadingContent(false);
     setError(null);
     setLabView('register');
@@ -182,6 +191,20 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Resources button — visible whenever a student is logged in */}
+              {student && labView !== 'register' && (
+                <button
+                  onClick={() => setLabView(labView === 'resources' ? 'topic' : 'resources')}
+                  className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
+                    labView === 'resources'
+                      ? 'text-blue-600'
+                      : 'text-gray-500 hover:text-blue-600'
+                  }`}
+                  title="Manage knowledge base resources"
+                >
+                  <BookMarked className="w-4 h-4" /> Resources
+                </button>
+              )}
               {student && labView !== 'register' && (
                 <button
                   onClick={handleLogout}
@@ -219,6 +242,11 @@ function App() {
           {/* ── VIEW: Register / Login ── */}
           {labView === 'register' && (
             <RegistrationPanel onEnter={handleEnter} />
+          )}
+
+          {/* ── VIEW: Resources ── */}
+          {labView === 'resources' && (
+            <ResourcesPanel onBack={() => setLabView(student ? 'topic' : 'register')} />
           )}
 
           {/* ── VIEW: Topic ── */}
@@ -313,6 +341,13 @@ function App() {
                         </div>
                         <h3 className="text-lg font-semibold text-gray-900 mb-3">{mod.title}</h3>
                         <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{mod.content}</p>
+                        {/* Video player — shown once backend sends video_ready */}
+                        {moduleVideos[mod.module_id] && (
+                          <VideoPlayer
+                            videoUrl={moduleVideos[mod.module_id]}
+                            moduleTitle={mod.title}
+                          />
+                        )}
                       </div>
                     ))}
 

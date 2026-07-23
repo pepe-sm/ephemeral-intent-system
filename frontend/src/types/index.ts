@@ -15,7 +15,7 @@ export interface StudentRegistration {
   registeredAt: string;
 }
 
-export type LabView = 'register' | 'topic' | 'learning' | 'complete';
+export type LabView = 'register' | 'topic' | 'resources' | 'learning' | 'complete';
 
 // ============================================================================
 // Biometric Types
@@ -188,10 +188,36 @@ export type WebSocketMessageType =
   | 'session_complete'
   | 'pipeline_status'
   | 'pipeline_complete'
+  | 'video_ready'
   | 'connection_established'
   | 'ping'
   | 'pong'
   | 'error';
+
+// ============================================================================
+// Resource Ingestion Types
+// ============================================================================
+
+export interface Resource {
+  id: string;
+  title: string;
+  source_url?: string;
+  chunk_count: number;
+  content_type: string;
+}
+
+export interface IngestResourcePayload {
+  title: string;
+  source_url?: string;
+  text?: string;
+}
+
+export interface IngestResourceResult {
+  source_id: string;
+  title: string;
+  chunks_added: number;
+  documents_processed: number;
+}
 
 export interface WebSocketMessage {
   type: WebSocketMessageType;

@@ -6,7 +6,9 @@ and message routing.
 """
 
 from typing import Dict, Any, Optional
+import asyncio
 import logging
+import os
 import threading
 from datetime import datetime
 
@@ -14,6 +16,7 @@ from app.services.biometric_analyzer import BiometricAnalyzer
 from app.services.rag_engine import RAGEngine
 from app.services.ui_orchestrator import UIOrchestrator
 from app.services.lifecycle_manager import LifecycleManager, SessionStatus
+from app.services.video_generator import VideoGenerator
 from app.models.biometric_token import BiometricAnalysisRequest, BiometricToken
 from app.models.knowledge_payload import RAGQueryRequest, KnowledgePayload
 
@@ -27,6 +30,7 @@ _biometric_analyzer: Optional[BiometricAnalyzer] = None
 _rag_engine: Optional[RAGEngine] = None
 _ui_orchestrator: Optional[UIOrchestrator] = None
 _lifecycle_manager: Optional[LifecycleManager] = None
+_video_generator: Optional[VideoGenerator] = None
 _rag_lock = threading.Lock()  # Prevent double-init on first request
 
 
@@ -71,6 +75,14 @@ def get_lifecycle_manager() -> LifecycleManager:
         _lifecycle_manager = LifecycleManager()
         logger.info("LifecycleManager initialised")
     return _lifecycle_manager
+
+
+def get_video_generator() -> VideoGenerator:
+    global _video_generator
+    if _video_generator is None:
+        _video_generator = VideoGenerator()
+        logger.info("VideoGenerator initialised (pipeline)")
+    return _video_generator
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +144,38 @@ async def handle_biometric_analysis(
         return None
 
 
+async def _generate_and_send_video(
+    send_fn,
+    session_id: str,
+    module_id: str,
+    script: str,
+    voice_pace: str,
+    vg: VideoGenerator,
+) -> None:
+    """
+    Background coroutine: generate a video for one module and push a
+    ``video_ready`` message over the WebSocket once it's done.
+    Failures are logged but never propagate — video is enhancement-only.
+    """
+    try:
+        result = await vg.generate_async(script=script, session_id=session_id, voice_pace=voice_pace)
+        if result.success and result.video_path and not result.is_mock:
+            filename = result.video_path.name
+            await _send(send_fn, session_id, {
+                "type": "video_ready",
+                "data": {
+                    "module_id": module_id,
+                    "video_url": f"/api/v1/video/{filename}",
+                    "generation_time_ms": result.generation_time_ms,
+                },
+            })
+            logger.info(f"video_ready sent for module {module_id} [{session_id}]")
+        elif result.is_mock:
+            logger.debug(f"Video mock for module {module_id} — tools not configured")
+    except Exception as exc:
+        logger.warning(f"Video generation failed for module {module_id} [{session_id}]: {exc}")
+
+
 async def handle_knowledge_query(
     send_fn,
     session_id: str,
@@ -151,9 +195,11 @@ async def handle_knowledge_query(
         engine = get_rag_engine()
         query = data.get("query", "")
         complexity = data.get("complexity_preference") or ComplexityLevel.INTERMEDIATE
+        voice_pace = data.get("voice_pace", "normal")
         logger.info(f"RAG query (streaming) [{session_id}]: {query}")
 
         collected: list = []
+        video_tasks: list = []  # background video generation tasks
 
         # Stream modules as they are parsed from the LLM output
         async for module in engine.stream_modules(query, complexity):
@@ -176,6 +222,19 @@ async def handle_knowledge_query(
                 },
             })
             logger.info(f"Module {module.module_id} streamed [{session_id}]: {module.title[:40]}")
+
+            # Fire video generation for each module in the background (non-blocking)
+            vg = get_video_generator()
+            if vg.is_ready():
+                module_id = module.module_id
+                script = f"{module.title}. {module.content}"
+                task = asyncio.ensure_future(
+                    _generate_and_send_video(
+                        send_fn, session_id, module_id,
+                        script, voice_pace, vg,
+                    )
+                )
+                video_tasks.append(task)
 
         if not collected:
             await _send(send_fn, session_id, {
