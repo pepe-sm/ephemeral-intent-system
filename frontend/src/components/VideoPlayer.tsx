@@ -2,9 +2,10 @@
  * VideoPlayer
  * Displays a generated talking-head video for a teaching module.
  * Renders nothing when no video URL is available (graceful degradation).
+ * Includes a timeline scrubber, current-time/duration display, and mute toggle.
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Play, Pause, Volume2, VolumeX, Video } from 'lucide-react';
 
 interface Props {
@@ -14,11 +15,43 @@ interface Props {
   moduleTitle?: string;
 }
 
+function fmt(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [playing, setPlaying] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [error, setError] = useState(false);
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const scrubRef    = useRef<HTMLInputElement>(null);
+  const [playing,   setPlaying]   = useState(false);
+  const [muted,     setMuted]     = useState(false);
+  const [current,   setCurrent]   = useState(0);
+  const [duration,  setDuration]  = useState(0);
+  const [error,     setError]     = useState(false);
+
+  // Keep scrubber in sync with video playback
+  const onTimeUpdate = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    setCurrent(v.currentTime);
+    if (scrubRef.current) scrubRef.current.value = String(v.currentTime);
+  }, []);
+
+  const onLoadedMetadata = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    setDuration(v.duration);
+    if (scrubRef.current) {
+      scrubRef.current.max = String(v.duration);
+    }
+  }, []);
+
+  // Sync scrubber max whenever duration changes
+  useEffect(() => {
+    if (scrubRef.current && duration > 0) scrubRef.current.max = String(duration);
+  }, [duration]);
 
   const toggle = () => {
     const v = videoRef.current;
@@ -38,6 +71,14 @@ export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
     setMuted(v.muted);
   };
 
+  const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const t = parseFloat(e.target.value);
+    v.currentTime = t;
+    setCurrent(t);
+  };
+
   if (error) {
     return (
       <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 flex items-center gap-2">
@@ -46,6 +87,8 @@ export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
       </div>
     );
   }
+
+  const progress = duration > 0 ? (current / duration) * 100 : 0;
 
   return (
     <div className="mt-4 rounded-xl overflow-hidden border border-gray-200 bg-black">
@@ -81,11 +124,42 @@ export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
         src={videoUrl}
         className="w-full max-h-56 object-contain bg-black cursor-pointer"
         playsInline
+        onTimeUpdate={onTimeUpdate}
+        onLoadedMetadata={onLoadedMetadata}
         onEnded={() => setPlaying(false)}
         onError={() => setError(true)}
         onClick={toggle}
         title="Click to play / pause"
       />
+
+      {/* Controls bar */}
+      <div className="bg-gray-900 px-3 py-1.5 flex items-center gap-2">
+        {/* time */}
+        <span className="text-[10px] text-gray-400 font-mono tabular-nums min-w-[60px]">
+          {fmt(current)} / {fmt(duration)}
+        </span>
+
+        {/* scrubber */}
+        <div className="relative flex-1 h-2 group">
+          {/* filled track */}
+          <div
+            className="absolute inset-y-0 left-0 bg-blue-500 rounded-full pointer-events-none"
+            style={{ width: `${progress}%` }}
+          />
+          {/* background track */}
+          <div className="absolute inset-0 bg-gray-700 rounded-full pointer-events-none" style={{ zIndex: -1 }} />
+          <input
+            ref={scrubRef}
+            type="range"
+            min="0"
+            step="0.1"
+            defaultValue="0"
+            onChange={handleScrub}
+            className="absolute inset-0 w-full opacity-0 cursor-pointer h-2"
+            aria-label="Video timeline"
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -329,6 +329,86 @@ async def delete_resource(source_id: str) -> Dict[str, Any]:
     return {"deleted": True, "source_id": source_id, "chunks_removed": deleted}
 
 
+@app.post("/api/v1/resources/ingest-url", tags=["Resources"])
+async def ingest_resource_url(
+    title: str = Form(...),
+    url: str = Form(...),
+) -> Dict[str, Any]:
+    """
+    Fetch a web page by URL and add its text content to the RAG knowledge base.
+    Uses httpx for the HTTP request and stdlib html.parser for extraction.
+    """
+    import re
+    from html.parser import HTMLParser
+    import httpx
+    from langchain_core.documents import Document as LCDocument
+
+    class _TextExtractor(HTMLParser):
+        """Strip all HTML tags; skip <script> and <style> blocks."""
+        def __init__(self):
+            super().__init__()
+            self.parts: list = []
+            self._skip = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style", "noscript"):
+                self._skip = True
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style", "noscript"):
+                self._skip = False
+
+        def handle_data(self, data):
+            if not self._skip:
+                self.parts.append(data)
+
+        def get_text(self) -> str:
+            raw = " ".join(self.parts)
+            # collapse whitespace
+            return re.sub(r"\s{2,}", " ", raw).strip()
+
+    # Fetch the page
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; EphemeralBot/1.0)"})
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=422, detail=f"HTTP {exc.response.status_code} fetching URL.")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {exc}")
+
+    # Extract text
+    parser = _TextExtractor()
+    parser.feed(resp.text)
+    text = parser.get_text()
+
+    if len(text) < 50:
+        raise HTTPException(status_code=422, detail="Page returned too little text to be useful.")
+
+    source_id = str(uuid.uuid4())
+    doc = LCDocument(
+        page_content=text[:50_000],   # cap at 50 K chars to avoid huge embeddings
+        metadata={
+            "source_id": source_id,
+            "title": title,
+            "source_url": url,
+            "content_type": "url",
+            "ingested_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+    engine = get_rag_engine()
+    chunk_count = engine.add_documents([doc])
+
+    return {
+        "source_id": source_id,
+        "title": title,
+        "chunks_added": chunk_count,
+        "documents_processed": 1,
+        "characters_extracted": len(text),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Video file serving
 # ---------------------------------------------------------------------------

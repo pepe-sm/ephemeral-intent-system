@@ -204,6 +204,7 @@ export interface Resource {
   source_url?: string;
   chunk_count: number;
   content_type: string;
+  ingested_at?: string;
 }
 
 export interface IngestResourcePayload {

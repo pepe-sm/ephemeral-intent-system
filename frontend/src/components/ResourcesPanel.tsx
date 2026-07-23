@@ -1,11 +1,14 @@
 /**
  * ResourcesPanel
- * Lets users add documents (text, .txt/.md/.pdf) to the RAG knowledge base,
- * and view / delete resources already indexed.
+ * Lets users add documents (text paste, file upload, or URL fetch) to the
+ * RAG knowledge base, and view / delete resources already indexed.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { BookMarked, Upload, Trash2, FileText, Link, AlertCircle, CheckCircle, RefreshCw, X } from 'lucide-react';
+import {
+  BookMarked, Upload, Trash2, FileText, Link, Globe,
+  AlertCircle, CheckCircle, RefreshCw, X,
+} from 'lucide-react';
 import type { Resource } from '@/types';
 import { config } from '@/config';
 
@@ -13,8 +16,37 @@ interface Props {
   onBack: () => void;
 }
 
-type IngestMode = 'text' | 'file';
-type Status = { type: 'idle' } | { type: 'loading' } | { type: 'success'; msg: string } | { type: 'error'; msg: string };
+type IngestMode = 'text' | 'file' | 'url';
+type Status =
+  | { type: 'idle' }
+  | { type: 'loading' }
+  | { type: 'success'; msg: string }
+  | { type: 'error'; msg: string };
+
+const CONTENT_TYPE_COLORS: Record<string, string> = {
+  text:  'bg-blue-100 text-blue-700',
+  md:    'bg-indigo-100 text-indigo-700',
+  pdf:   'bg-red-100 text-red-700',
+  url:   'bg-green-100 text-green-700',
+};
+
+function ctBadge(ct: string) {
+  const cls = CONTENT_TYPE_COLORS[ct] ?? 'bg-gray-100 text-gray-600';
+  return (
+    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cls}`}>
+      {ct.toUpperCase()}
+    </span>
+  );
+}
+
+function fmtDate(iso?: string) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '';
+  }
+}
 
 async function apiFetch(path: string, init?: RequestInit) {
   const res = await fetch(`${config.backend_url}${path}`, init);
@@ -31,19 +63,19 @@ export function ResourcesPanel({ onBack }: Props) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [urlInput, setUrlInput] = useState('');
   const [status, setStatus] = useState<Status>({ type: 'idle' });
   const [resources, setResources] = useState<Resource[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Load existing resources on mount ──────────────────────────────────────
+  // ── Load existing resources on mount ────────────────────────────────────
   const fetchResources = async () => {
     setLoadingList(true);
     try {
       const data = await apiFetch('/api/v1/resources');
       setResources(data.resources ?? []);
-    } catch (e) {
-      // Non-fatal — just show empty list
+    } catch {
       setResources([]);
     } finally {
       setLoadingList(false);
@@ -52,38 +84,49 @@ export function ResourcesPanel({ onBack }: Props) {
 
   useEffect(() => { void fetchResources(); }, []);
 
-  // ── Submit handler ─────────────────────────────────────────────────────────
+  // ── Submit handler ───────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) { setStatus({ type: 'error', msg: 'Title is required.' }); return; }
     if (mode === 'text' && !text.trim()) { setStatus({ type: 'error', msg: 'Paste some text to ingest.' }); return; }
     if (mode === 'file' && !file) { setStatus({ type: 'error', msg: 'Select a file to upload.' }); return; }
+    if (mode === 'url' && !urlInput.trim()) { setStatus({ type: 'error', msg: 'Enter a URL to fetch.' }); return; }
 
     setStatus({ type: 'loading' });
 
     try {
-      const fd = new FormData();
-      fd.append('title', title.trim());
-      if (sourceUrl.trim()) fd.append('source_url', sourceUrl.trim());
-      if (mode === 'text') fd.append('text', text.trim());
-      if (mode === 'file' && file) fd.append('file', file);
+      let result: Record<string, unknown>;
 
-      const result = await apiFetch('/api/v1/resources/ingest', { method: 'POST', body: fd });
-      setStatus({
-        type: 'success',
-        msg: `✓ "${result.title}" indexed — ${result.chunks_added} chunk${result.chunks_added !== 1 ? 's' : ''} added.`,
-      });
-      // Reset form
-      setTitle(''); setSourceUrl(''); setText(''); setFile(null);
+      if (mode === 'url') {
+        const fd = new FormData();
+        fd.append('title', title.trim());
+        fd.append('url', urlInput.trim());
+        result = await apiFetch('/api/v1/resources/ingest-url', { method: 'POST', body: fd });
+      } else {
+        const fd = new FormData();
+        fd.append('title', title.trim());
+        if (sourceUrl.trim()) fd.append('source_url', sourceUrl.trim());
+        if (mode === 'text') fd.append('text', text.trim());
+        if (mode === 'file' && file) fd.append('file', file);
+        result = await apiFetch('/api/v1/resources/ingest', { method: 'POST', body: fd });
+      }
+
+      const chunks = result.chunks_added as number;
+      const chars  = result.characters_extracted as number | undefined;
+      let msg = `✓ "${result.title}" indexed — ${chunks} chunk${chunks !== 1 ? 's' : ''} added.`;
+      if (chars !== undefined) msg += ` (${chars.toLocaleString()} chars extracted)`;
+      setStatus({ type: 'success', msg });
+
+      // Reset form fields
+      setTitle(''); setSourceUrl(''); setText(''); setFile(null); setUrlInput('');
       if (fileInputRef.current) fileInputRef.current.value = '';
-      // Refresh list
       void fetchResources();
     } catch (err) {
       setStatus({ type: 'error', msg: err instanceof Error ? err.message : 'Ingestion failed.' });
     }
   };
 
-  // ── Delete handler ─────────────────────────────────────────────────────────
+  // ── Delete handler ───────────────────────────────────────────────────────
   const handleDelete = async (id: string, resourceTitle: string) => {
     if (!window.confirm(`Remove "${resourceTitle}" from the knowledge base?`)) return;
     try {
@@ -94,12 +137,19 @@ export function ResourcesPanel({ onBack }: Props) {
     }
   };
 
-  // ── Drag-and-drop ──────────────────────────────────────────────────────────
+  // ── Drag-and-drop ────────────────────────────────────────────────────────
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const dropped = e.dataTransfer.files[0];
     if (dropped) { setFile(dropped); setMode('file'); }
   };
+
+  // ── Mode tab config ──────────────────────────────────────────────────────
+  const modes: { id: IngestMode; label: string; Icon: React.FC<{ className?: string }> }[] = [
+    { id: 'text', label: 'Paste text', Icon: FileText },
+    { id: 'file', label: 'Upload file', Icon: Upload },
+    { id: 'url',  label: 'From URL',   Icon: Globe },
+  ];
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -129,19 +179,19 @@ export function ResourcesPanel({ onBack }: Props) {
 
           {/* Mode toggle */}
           <div className="flex gap-2 mb-4">
-            {(['text', 'file'] as IngestMode[]).map(m => (
+            {modes.map(({ id, label, Icon }) => (
               <button
-                key={m}
+                key={id}
                 type="button"
-                onClick={() => setMode(m)}
+                onClick={() => setMode(id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  mode === m
+                  mode === id
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
-                {m === 'text' ? <FileText className="w-3.5 h-3.5" /> : <Upload className="w-3.5 h-3.5" />}
-                {m === 'text' ? 'Paste text' : 'Upload file'}
+                <Icon className="w-3.5 h-3.5" />
+                {label}
               </button>
             ))}
           </div>
@@ -155,10 +205,10 @@ export function ResourcesPanel({ onBack }: Props) {
             }`}>
               {status.type === 'success' && <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
               {status.type === 'error' && <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
-              {status.type === 'loading' && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin flex-shrink-0 mt-0.5" />}
-              <span>
-                {status.type === 'loading' ? 'Indexing resource…' : status.msg}
-              </span>
+              {status.type === 'loading' && (
+                <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin flex-shrink-0 mt-0.5" />
+              )}
+              <span>{status.type === 'loading' ? 'Indexing resource…' : status.msg}</span>
               {status.type !== 'loading' && (
                 <button onClick={() => setStatus({ type: 'idle' })} className="ml-auto opacity-60 hover:opacity-100">
                   <X className="w-3.5 h-3.5" />
@@ -170,34 +220,68 @@ export function ResourcesPanel({ onBack }: Props) {
           <form onSubmit={handleSubmit} className="space-y-3">
             {/* Title */}
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Title <span className="text-red-500">*</span></label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Title <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={title}
                 onChange={e => setTitle(e.target.value)}
-                placeholder="e.g. Lecture 3 — Binary Trees"
+                placeholder={
+                  mode === 'url'
+                    ? 'e.g. Python Docs — asyncio'
+                    : 'e.g. Lecture 3 — Binary Trees'
+                }
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
 
-            {/* Source URL (optional) */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                <span className="flex items-center gap-1"><Link className="w-3 h-3" /> Source URL <span className="text-gray-400 font-normal">(optional)</span></span>
-              </label>
-              <input
-                type="url"
-                value={sourceUrl}
-                onChange={e => setSourceUrl(e.target.value)}
-                placeholder="https://…"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
+            {/* URL input (url mode) */}
+            {mode === 'url' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  <span className="flex items-center gap-1">
+                    <Globe className="w-3 h-3" /> Web page URL <span className="text-red-500">*</span>
+                  </span>
+                </label>
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={e => setUrlInput(e.target.value)}
+                  placeholder="https://docs.python.org/…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  The page will be fetched server-side and its text extracted automatically.
+                </p>
+              </div>
+            )}
+
+            {/* Source URL (text / file modes) */}
+            {mode !== 'url' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  <span className="flex items-center gap-1">
+                    <Link className="w-3 h-3" /> Source URL{' '}
+                    <span className="text-gray-400 font-normal">(optional)</span>
+                  </span>
+                </label>
+                <input
+                  type="url"
+                  value={sourceUrl}
+                  onChange={e => setSourceUrl(e.target.value)}
+                  placeholder="https://…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            )}
 
             {/* Text area */}
             {mode === 'text' && (
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Content <span className="text-red-500">*</span></label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Content <span className="text-red-500">*</span>
+                </label>
                 <textarea
                   value={text}
                   onChange={e => setText(e.target.value)}
@@ -205,7 +289,7 @@ export function ResourcesPanel({ onBack }: Props) {
                   rows={7}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y font-mono"
                 />
-                <p className="text-xs text-gray-400 mt-1">{text.length} characters</p>
+                <p className="text-xs text-gray-400 mt-1">{text.length.toLocaleString()} characters</p>
               </div>
             )}
 
@@ -221,7 +305,13 @@ export function ResourcesPanel({ onBack }: Props) {
                     <FileText className="w-4 h-4 text-blue-500" />
                     <span className="font-medium">{file.name}</span>
                     <span className="text-gray-400">({(file.size / 1024).toFixed(1)} KB)</span>
-                    <button type="button" onClick={() => setFile(null)} className="text-red-400 hover:text-red-600 ml-1"><X className="w-3.5 h-3.5" /></button>
+                    <button
+                      type="button"
+                      onClick={() => setFile(null)}
+                      className="text-red-400 hover:text-red-600 ml-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ) : (
                   <>
@@ -260,7 +350,12 @@ export function ResourcesPanel({ onBack }: Props) {
         {/* ── Indexed resources list (right / bottom) ── */}
         <div className="lg:col-span-2 bg-white rounded-2xl shadow-lg p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-gray-900 text-sm uppercase tracking-wide">Indexed Resources</h3>
+            <h3 className="font-semibold text-gray-900 text-sm uppercase tracking-wide">
+              Indexed Resources
+              {resources.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-gray-400">({resources.length})</span>
+              )}
+            </h3>
             <button
               onClick={fetchResources}
               disabled={loadingList}
@@ -291,8 +386,16 @@ export function ResourcesPanel({ onBack }: Props) {
               <li key={r.id} className="flex items-start gap-2 p-2.5 rounded-lg hover:bg-gray-50 group">
                 <FileText className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">{r.title}</p>
-                  <p className="text-xs text-gray-400">{r.chunk_count} chunk{r.chunk_count !== 1 ? 's' : ''} · {r.content_type}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-medium text-gray-800 truncate">{r.title}</p>
+                    {ctBadge(r.content_type)}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {r.chunk_count} chunk{r.chunk_count !== 1 ? 's' : ''}
+                    {r.ingested_at && (
+                      <span className="ml-1 text-gray-300">· {fmtDate(r.ingested_at)}</span>
+                    )}
+                  </p>
                   {r.source_url && (
                     <a
                       href={r.source_url}
@@ -306,7 +409,7 @@ export function ResourcesPanel({ onBack }: Props) {
                 </div>
                 <button
                   onClick={() => handleDelete(r.id, r.title)}
-                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-all flex-shrink-0"
+                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-all flex-shrink-0 mt-0.5"
                   title="Remove from knowledge base"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

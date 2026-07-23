@@ -29,8 +29,8 @@ except ImportError:
     OllamaLLM = None  # type: ignore
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from ..models.knowledge_payload import (
@@ -1536,6 +1536,7 @@ Regular, shorter study sessions are more effective than occasional long cramming
                         "source_url": meta.get("source_url"),
                         "chunk_count": 0,
                         "content_type": meta.get("content_type", "text"),
+                        "ingested_at": meta.get("ingested_at"),
                     }
                 seen[sid]["chunk_count"] += 1
 

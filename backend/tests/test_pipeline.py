@@ -296,9 +296,14 @@ class TestPipelineHandlers:
     async def test_knowledge_query_error_sends_error_message(self, send_fn, sent_messages):
         """If the RAG engine fails, the error must be sent to the client, not swallowed."""
         from app.api.pipeline import handle_knowledge_query
+
+        async def _failing_stream(query, complexity):
+            raise RuntimeError("ollama timeout")
+            yield  # make this an async generator
+
         with patch("app.api.pipeline.get_rag_engine") as mock_get:
             mock_engine = MagicMock()
-            mock_engine.query = AsyncMock(side_effect=RuntimeError("ollama timeout"))
+            mock_engine.stream_modules = _failing_stream
             mock_get.return_value = mock_engine
 
             result = await handle_knowledge_query(

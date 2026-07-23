@@ -5,7 +5,7 @@
  * Flow: Register / Login → Pick Topic → Learning Session → Complete
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RegistrationPanel } from '@/components/RegistrationPanel';
 import { TopicPanel } from '@/components/TopicPanel';
@@ -27,7 +27,11 @@ function App() {
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   // moduleId → video URL, populated as video_ready WS messages arrive
-  const [moduleVideos, setModuleVideos] = useState<Record<string, string>>({});
+  const [moduleVideos,   setModuleVideos]   = useState<Record<string, string>>({});
+  // moduleIds currently awaiting video generation (spinner shown until video_ready)
+  const [videoPending,   setVideoPending]   = useState<Set<string>>(new Set());
+  // whether the backend VideoGenerator is ready (checked once on mount)
+  const videoEnabledRef = useRef<boolean>(false);
 
   const {
     session,
@@ -58,6 +62,10 @@ function App() {
         next[index] = mod;
         return next;
       });
+      // Mark this module as pending a video only if the backend pipeline is ready
+      if (videoEnabledRef.current) {
+        setVideoPending(prev => new Set([...prev, mod.module_id]));
+      }
       if (isFirst) {
         setCurrentModuleIndex(0);
         setIsLoadingContent(false);
@@ -86,6 +94,11 @@ function App() {
     },
     onVideoReady: (moduleId, videoUrl) => {
       setModuleVideos(prev => ({ ...prev, [moduleId]: videoUrl }));
+      setVideoPending(prev => {
+        const next = new Set(prev);
+        next.delete(moduleId);
+        return next;
+      });
     },
     onError: (err) => {
       setError(err.message);
@@ -97,6 +110,14 @@ function App() {
   // ── Mount effects ────────────────────────────────────────────────────────
   useEffect(() => {
     rehydrate();
+    // Check whether the backend video pipeline is ready so we know whether to
+    // show "Generating video…" spinners.
+    fetch(`${config.backend_url}/health`)
+      .then(r => r.json())
+      .then(data => {
+        videoEnabledRef.current = data?.components?.video_generator === 'ready';
+      })
+      .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -158,6 +179,7 @@ function App() {
     setUIComponentTree(null);
     setStreamedModules([]);
     setModuleVideos({});
+    setVideoPending(new Set());
     setIsLoadingContent(false);
     setError(null);
     setLabView('topic');
@@ -168,6 +190,7 @@ function App() {
     setUIComponentTree(null);
     setStreamedModules([]);
     setModuleVideos({});
+    setVideoPending(new Set());
     setIsLoadingContent(false);
     setError(null);
     setLabView('register');
@@ -342,11 +365,16 @@ function App() {
                         <h3 className="text-lg font-semibold text-gray-900 mb-3">{mod.title}</h3>
                         <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{mod.content}</p>
                         {/* Video player — shown once backend sends video_ready */}
-                        {moduleVideos[mod.module_id] && (
+                        {moduleVideos[mod.module_id] ? (
                           <VideoPlayer
                             videoUrl={moduleVideos[mod.module_id]}
                             moduleTitle={mod.title}
                           />
+                        ) : videoPending.has(mod.module_id) && (
+                          <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
+                            <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
+                            Generating video…
+                          </div>
                         )}
                       </div>
                     ))}
