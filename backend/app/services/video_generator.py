@@ -26,6 +26,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -371,7 +372,8 @@ class VideoGenerator:
             )
 
         cmd = [
-            "python", str(inference_script),
+            sys.executable,        # use the venv Python — has all required packages
+            str(inference_script),
             "--checkpoint_path", str(self.wav2lip_checkpoint),
             "--face", str(self.avatar_image),
             "--audio", str(audio_wav),
