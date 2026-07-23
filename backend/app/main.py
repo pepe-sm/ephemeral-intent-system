@@ -144,6 +144,13 @@ async def health_check() -> Dict[str, Any]:
     }
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Silence browser favicon requests — return 204 No Content."""
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
+
 @app.get("/", tags=["System"])
 async def root() -> Dict[str, Any]:
     return {
