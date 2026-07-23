@@ -45,6 +45,193 @@ from ..models.knowledge_payload import (
 
 logger = logging.getLogger(__name__)
 
+import re as _re
+
+# ---------------------------------------------------------------------------
+# Module-level helpers — model-agnostic prompt + parser
+# ---------------------------------------------------------------------------
+
+def _build_prompt(query: str, complexity) -> str:
+    """Minimal prompt that works well across llama3.2, phi3:mini, and watsonx."""
+    return (
+        f"You are a teaching assistant. Explain '{query}' at {complexity.value} level.\n"
+        f"Write 3 separate paragraphs. Each paragraph = one learning module.\n"
+        f"Paragraph 1: What it is (definition + how it works).\n"
+        f"Paragraph 2: Why it matters / key concepts.\n"
+        f"Paragraph 3: Concrete example or step-by-step.\n"
+        f"Keep each paragraph to 3-4 sentences. No bullet points, no markdown headers.\n\n"
+    )
+
+
+def _clean(text: str) -> str:
+    """Strip markdown artifacts that LLMs insert (**bold**, ## headers, ---).
+    Handles both phi3:mini and llama3.2 output styles."""
+    # Remove ** / * bold/italic markers
+    text = _re.sub(r'\*{1,3}', '', text)
+    # Remove markdown headers (## title)
+    text = _re.sub(r'^#{1,6}\s*', '', text, flags=_re.MULTILINE)
+    # Remove horizontal rules
+    text = _re.sub(r'^-{3,}\s*$', '', text, flags=_re.MULTILINE)
+    # Remove inline "Module N: Title" / "Learning Module N: Title" prefixes
+    # These appear inside paragraphs: "Learning Module 1: What is the KernelThe kernel is..."
+    text = _re.sub(
+        r'(?:Learning\s+)?Module\s+\d+\s*:\s*[^.!?\n]{0,80}',
+        '', text, flags=_re.IGNORECASE
+    )
+    # Remove "Paragraph N:" / "Section N:" prefix lines
+    text = _re.sub(r'^(Paragraph|Section)\s+\d+[:\s]*', '', text, flags=_re.MULTILINE | _re.IGNORECASE)
+    # Remove "Type: xxx", "Content:", "Title:" label-only lines
+    text = _re.sub(r'^(Type):\s.*$', '', text, flags=_re.MULTILINE | _re.IGNORECASE)
+    text = _re.sub(r'^(Content|Title):\s{0,2}(?!\w)', '', text, flags=_re.MULTILINE | _re.IGNORECASE)
+    # Remove standalone section-title lines (short, no sentence-ending punctuation)
+    # e.g. "Definition and Functionality of a Kernel" on its own line
+    text = _re.sub(r'^[A-Z][^\n.!?]{5,70}$\n?', '', text, flags=_re.MULTILINE)
+    # Strip leading colon/dash left behind
+    text = _re.sub(r'^[:\-–]\s*', '', text, flags=_re.MULTILINE)
+    # Collapse multiple blank lines and leading/trailing whitespace
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+# Map keyword hints in a paragraph to a ModuleType
+_TYPE_HINTS = {
+    "example": "code_example",
+    "step": "step_by_step",
+    "how to": "step_by_step",
+    "algorithm": "code_example",
+    "code": "code_example",
+    "program": "code_example",
+    "diagram": "visual_diagram",
+    "reference": "quick_reference",
+    "demo": "interactive_demo",
+}
+_MODULE_TYPE_MAP = {
+    "explanation":    None,   # filled at runtime
+    "code_example":   None,
+    "step_by_step":   None,
+    "interactive_demo": None,
+    "quick_reference": None,
+    "visual_diagram": None,
+}
+
+
+def _infer_type(text: str, index: int):
+    """Guess module type from paragraph content."""
+    # Import here to avoid circular issues; these are always available
+    from app.models.knowledge_payload import ModuleType  # type: ignore
+    lower = text.lower()
+    for keyword, type_name in _TYPE_HINTS.items():
+        if keyword in lower:
+            return getattr(ModuleType, type_name.upper(), ModuleType.EXPLANATION)
+    # Default: first module = explanation, rest alternate
+    return ModuleType.EXPLANATION if index == 0 else (
+        ModuleType.CODE_EXAMPLE if index == 1 else ModuleType.STEP_BY_STEP
+    )
+
+
+# Descriptive titles based on module position — used when the LLM doesn't give us a short title
+_DEFAULT_TITLES = [
+    "Introduction & Definition",
+    "Key Concepts",
+    "Practical Example",
+    "Deep Dive",
+    "Summary",
+]
+
+
+def _para_to_module(para: str, index: int, complexity, query: str = "") -> "TeachingModule | None":
+    """Convert a paragraph of text into a TeachingModule. Returns None if too short."""
+    from app.models.knowledge_payload import TeachingModule  # type: ignore
+    clean = _clean(para)
+    # Skip anything that is just a short header with no body (< 80 chars)
+    if len(clean) < 80:
+        return None
+
+    # Title: use the first sentence only if it's a reasonable title length (≤ 60 chars)
+    # Otherwise fall back to a meaningful positional default
+    first_line = clean.split('\n')[0]
+    sentences = _re.split(r'(?<=[.!?])\s', first_line)
+    first_sentence = sentences[0] if sentences else first_line
+
+    if 10 <= len(first_sentence) <= 60:
+        title = first_sentence.rstrip('.').strip()
+        content_after = clean[len(first_sentence):].strip()
+        # If stripping the title leaves no real content, use the whole paragraph as content
+        content = content_after if len(content_after) > 40 else clean
+    else:
+        # First sentence is too long or too short — use a descriptive default
+        title = _DEFAULT_TITLES[index] if index < len(_DEFAULT_TITLES) else f"Module {index + 1}"
+        content = clean
+
+    return TeachingModule(
+        module_id=f"mod_{index + 1:03d}",
+        type=_infer_type(clean, index),
+        title=title,
+        content=content,
+        estimated_time=60 + index * 30,
+        complexity=complexity,
+        interactive=index > 0,
+        order=index,
+    )
+
+
+def _parse_llm_response(response: str, complexity) -> list:
+    """
+    Parse a full LLM response into a list of TeachingModule objects.
+    Handles any output format: MODULE N blocks, **Module N:** headers,
+    markdown paragraphs, or plain prose.
+    """
+    # Strategy 1: split on "MODULE N" / "**Module N:**" / "Module N:" markers
+    # Do this BEFORE _clean() so the markers are still present.
+    raw_blocks = _re.split(
+        r'\*{0,3}Module\s+\d+[:*\s]*',
+        response,
+        flags=_re.IGNORECASE,
+    )
+    raw_blocks = [b.strip() for b in raw_blocks if len(b.strip()) > 40]
+    if len(raw_blocks) >= 2:
+        modules = []
+        for i, block in enumerate(raw_blocks[:3]):
+            m = _para_to_module(_clean(block), i, complexity)
+            if m:
+                modules.append(m)
+        if modules:
+            return modules
+
+    # Strategy 2: split on double newlines (llama3.2 natural paragraphs)
+    # Merge short adjacent chunks so a bolded title doesn't become its own module
+    cleaned = _clean(response)
+    raw_paras = [p.strip() for p in cleaned.split("\n\n") if p.strip()]
+    merged_paras: list[str] = []
+    carry = ""
+    for p in raw_paras:
+        chunk = (carry + " " + p).strip() if carry else p
+        if len(chunk) >= 150:
+            merged_paras.append(chunk)
+            carry = ""
+        else:
+            carry = chunk
+    if carry:
+        merged_paras.append(carry)
+
+    if merged_paras:
+        modules = []
+        for i, para in enumerate(merged_paras[:3]):
+            m = _para_to_module(para, i, complexity)
+            if m:
+                modules.append(m)
+        if modules:
+            return modules
+
+    # Strategy 3: whole response as a single explanation module
+    cleaned = _clean(response)
+    if len(cleaned) > 40:
+        m = _para_to_module(cleaned, 0, complexity)
+        if m:
+            return [m]
+
+    return []
+
 
 class RAGEngine:
     """
@@ -179,14 +366,9 @@ class RAGEngine:
                     self.mock_mode = True
                     return
             
-            # Initialize LangChain Ollama LLM
-            # num_predict caps output tokens so responses arrive in ~15-30 s
-            self.ollama_llm = OllamaLLM(
-                model=self.ollama_model,
-                base_url=self.ollama_base_url,
-                temperature=0.7,
-                num_predict=512,
-            )
+            # Use the raw ollama client directly — LangChain's OllamaLLM wrapper
+            # ignores num_predict, making responses 3-5× slower than necessary.
+            self.ollama_client = client  # reuse the already-open client
             
             self.llm_provider = "ollama"
             logger.info(f"Ollama client initialized successfully with model '{self.ollama_model}'")
@@ -371,129 +553,140 @@ class RAGEngine:
         self,
         query: str,
         context: str,
-        complexity: ComplexityLevel
+        complexity: ComplexityLevel,
     ) -> List[TeachingModule]:
-        """Generate teaching modules using configured LLM (watsonx.ai or Ollama)"""
-        
-        # Keep the prompt short to minimise token generation time.
-        # Context is included only when available (non-empty vector store).
-        context_section = f"\nContext:\n{context[:1000]}\n" if context.strip() else ""
-        prompt = f"""You are a concise teaching assistant. Answer this student question at {complexity.value} level.
-
-Question: {query}{context_section}
-Write exactly 2 short teaching modules. Use this exact format:
-
-MODULE 1
-Title: <title>
-Content: <2-3 sentence explanation>
-Type: explanation
-
-MODULE 2
-Title: <title>
-Content: <2-3 sentence explanation with example>
-Type: code_example"""
-
+        """Generate teaching modules using the configured LLM."""
         try:
             if self.llm_provider == "ollama":
-                # Generate response using Ollama
-                response_text = await asyncio.to_thread(
-                    self.ollama_llm.invoke,
-                    prompt
+                resp = await asyncio.to_thread(
+                    self.ollama_client.generate,
+                    model=self.ollama_model,
+                    prompt=_build_prompt(query, complexity),
+                    options={"num_predict": 400, "temperature": 0.4},
                 )
+                raw = resp.response if hasattr(resp, "response") else str(resp)
             elif self.llm_provider == "watsonx":
-                # Generate response using watsonx.ai
-                response = self.model.generate_text(
-                    prompt=prompt,
-                    params={
-                        "max_new_tokens": 1000,
-                        "temperature": 0.7,
-                        "top_p": 0.9
-                    }
+                raw = self.model.generate_text(
+                    prompt=_build_prompt(query, complexity),
+                    params={"max_new_tokens": 350, "temperature": 0.4, "top_p": 0.9},
                 )
-                response_text = str(response) if not isinstance(response, str) else response
+                raw = str(raw) if not isinstance(raw, str) else raw
             else:
-                # Fallback to default modules
                 return self._create_default_modules(query, complexity)
-            
-            # Parse response into modules (simplified for POC)
-            modules = self._parse_modules_from_response(response_text, complexity)
-            return modules
-            
+
+            modules = _parse_llm_response(raw, complexity)
+            return modules if modules else self._create_default_modules(query, complexity)
+
         except Exception as e:
             logger.error(f"Error generating modules with {self.llm_provider}: {e}")
             return self._create_default_modules(query, complexity)
-    
+
+    async def stream_modules(
+        self,
+        query: str,
+        complexity: ComplexityLevel,
+    ):
+        """
+        Async generator — yields TeachingModule objects one at a time as the LLM
+        streams tokens.  Splits on double-newlines so each paragraph becomes a
+        module as soon as it's complete — works with any LLM output style.
+
+        Yields: TeachingModule
+        """
+        import queue as _queue
+
+        if self.llm_provider != "ollama" or not hasattr(self, "ollama_client"):
+            for m in await self._generate_teaching_modules(query, "", complexity):
+                yield m
+            return
+
+        q: _queue.Queue = _queue.Queue()
+        _DONE = object()
+
+        def _run_stream():
+            try:
+                for chunk in self.ollama_client.generate(
+                    model=self.ollama_model,
+                    prompt=_build_prompt(query, complexity),
+                    stream=True,
+                    options={"num_predict": 400, "temperature": 0.4},
+                ):
+                    q.put(chunk.response)
+                    if chunk.done:
+                        break
+            except Exception as exc:
+                logger.error(f"Ollama stream error: {exc}")
+            finally:
+                q.put(_DONE)
+
+        loop = asyncio.get_event_loop()
+        thread = loop.run_in_executor(None, _run_stream)
+
+        accumulated = ""
+        emitted_count = 0
+
+        def _pop_complete_paragraphs(flush: bool) -> list:
+            """Return complete double-newline-separated paragraphs.
+
+            A paragraph is only 'ready' once it has real content (>= 150 chars).
+            Short fragments (e.g. a bolded header the LLM emits before the body)
+            are held in the buffer and merged with the next chunk.
+            """
+            nonlocal accumulated
+            parts = accumulated.split("\n\n")
+            # Last part may be incomplete unless flushing
+            ready_parts = parts if flush else parts[:-1]
+            remaining = "" if flush else parts[-1]
+            # Merge short fragments into the next part instead of emitting them
+            merged: list[str] = []
+            carry = ""
+            for p in ready_parts:
+                combined = (carry + "\n\n" + p).strip() if carry else p.strip()
+                if len(combined) >= 150 or flush:
+                    merged.append(combined)
+                    carry = ""
+                else:
+                    carry = combined
+            # Any leftover carry goes back into the buffer (not flushing)
+            if carry and not flush:
+                accumulated = carry + ("\n\n" + remaining if remaining else "")
+            elif carry and flush:
+                merged.append(carry)
+            else:
+                accumulated = remaining
+            return merged
+
+        while True:
+            try:
+                token = await asyncio.wait_for(
+                    loop.run_in_executor(None, q.get), timeout=120
+                )
+            except asyncio.TimeoutError:
+                logger.error("Ollama stream timed out")
+                break
+
+            is_done = token is _DONE
+            if not is_done:
+                accumulated += token
+
+            for para in _pop_complete_paragraphs(is_done):
+                mod = _para_to_module(para, emitted_count, complexity)
+                if mod:
+                    emitted_count += 1
+                    yield mod
+
+            if is_done:
+                break
+
+        await thread
+
     def _parse_modules_from_response(
         self,
         response: str,
-        complexity: ComplexityLevel
+        complexity: ComplexityLevel,
     ) -> List[TeachingModule]:
-        """Parse LLM response into TeachingModule objects.
-
-        Understands the structured format:
-            MODULE N
-            Title: ...
-            Content: ...
-            Type: explanation|code_example|step_by_step
-        Falls back to splitting on blank lines for any other format.
-        """
-        import re
-
-        modules: List[TeachingModule] = []
-
-        # Try structured MODULE N ... blocks first
-        blocks = re.split(r'\bMODULE\s+\d+\b', response, flags=re.IGNORECASE)
-        blocks = [b.strip() for b in blocks if b.strip()]
-
-        type_map = {
-            "explanation": ModuleType.EXPLANATION,
-            "code_example": ModuleType.CODE_EXAMPLE,
-            "step_by_step": ModuleType.STEP_BY_STEP,
-            "interactive_demo": ModuleType.INTERACTIVE_DEMO,
-            "quick_reference": ModuleType.QUICK_REFERENCE,
-            "visual_diagram": ModuleType.VISUAL_DIAGRAM,
-        }
-
-        for i, block in enumerate(blocks[:3]):
-            title_m = re.search(r'Title:\s*(.+)', block, re.IGNORECASE)
-            content_m = re.search(r'Content:\s*(.+?)(?=Type:|$)', block, re.IGNORECASE | re.DOTALL)
-            type_m = re.search(r'Type:\s*(\w+)', block, re.IGNORECASE)
-
-            title = title_m.group(1).strip() if title_m else f"Module {i + 1}"
-            content = content_m.group(1).strip() if content_m else block.strip()
-            mod_type_str = type_m.group(1).lower() if type_m else ("explanation" if i == 0 else "code_example")
-            mod_type = type_map.get(mod_type_str, ModuleType.EXPLANATION if i == 0 else ModuleType.CODE_EXAMPLE)
-
-            if len(content) > 20:
-                modules.append(TeachingModule(
-                    module_id=f"mod_{i + 1:03d}",
-                    type=mod_type,
-                    title=title,
-                    content=content,
-                    estimated_time=60 + (i * 30),
-                    complexity=complexity,
-                    interactive=i > 0,
-                    order=i,
-                ))
-
-        if modules:
-            return modules
-
-        # Fallback: split on blank lines
-        sections = [s.strip() for s in response.split("\n\n") if len(s.strip()) > 50]
-        for i, section in enumerate(sections[:3]):
-            modules.append(TeachingModule(
-                module_id=f"mod_{i + 1:03d}",
-                type=ModuleType.EXPLANATION if i == 0 else ModuleType.CODE_EXAMPLE,
-                title=f"Module {i + 1}",
-                content=section,
-                estimated_time=60 + (i * 30),
-                complexity=complexity,
-                interactive=i > 0,
-                order=i,
-            ))
-
-        return modules if modules else self._create_default_modules("", complexity)
+        """Parse a full LLM response into TeachingModule list (non-streaming path)."""
+        return _parse_llm_response(response, complexity)
     
     def _create_default_modules(
         self,

@@ -60,7 +60,7 @@ cp .env.example .env
 # nano .env  # or use your preferred editor
 
 # Run the backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python run.py
 ```
 
 ### Frontend Setup
@@ -453,7 +453,7 @@ Enable debug mode for detailed logging:
 
 ```bash
 # Backend
-DEBUG=true uvicorn app.main:app --reload
+DEBUG=true python run.py
 
 # Frontend
 VITE_DEBUG_MODE=true npm run dev

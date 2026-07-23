@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 ```bash
 # Start backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python run.py
 ```
 
 You should see:
@@ -243,7 +243,7 @@ ollama run llama3.2 "Explain Python variables in simple terms"
 ```bash
 # Start backend
 cd backend
-uvicorn app.main:app --reload
+python run.py
 
 # Check logs for:
 # "RAGEngine initialized with ollama provider (model: llama3.2)"

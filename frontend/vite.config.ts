@@ -21,6 +21,8 @@ export default defineConfig({
       '/ws': {
         target: 'ws://localhost:8000',
         ws: true,
+        timeout: 0,           // disable proxy timeout — LLM can take 60-90 s
+        proxyTimeout: 0,
       },
     },
   },

@@ -17,62 +17,95 @@ from datetime import datetime
 from typing import Dict, Any
 import os
 
-# Import WebSocket handler
 from app.api.websocket import websocket_endpoint
+from app.api.pipeline import get_rag_engine, is_rag_ready, get_lifecycle_manager
+from app.services.video_generator import VideoGenerator
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level singletons — created once, reused everywhere
+# ---------------------------------------------------------------------------
 
-def _warm_up_services():
-    """Pre-load heavy services (embeddings model, ChromaDB) in a background thread.
-    This prevents the first WebSocket connection from timing out waiting for them."""
+_video_generator: VideoGenerator | None = None
+
+
+def get_video_generator() -> VideoGenerator:
+    global _video_generator
+    if _video_generator is None:
+        _video_generator = VideoGenerator()
+    return _video_generator
+
+
+# ---------------------------------------------------------------------------
+# Startup warm-up
+# ---------------------------------------------------------------------------
+
+def _warm_up_services() -> None:
+    """Pre-load heavy services in a background thread so the server accepts
+    connections immediately.  The first WS client that arrives before warm-up
+    finishes gets a friendly 'warming_up' status message.
+
+    NOTE: do NOT start async tasks here — there is no event loop in this thread.
+    Async startup (LifecycleManager monitoring) happens in the lifespan coroutine.
+    """
     try:
-        logger.info("⏳ Pre-loading RAG engine (embeddings + vector store)…")
-        from app.api.websocket import get_rag_engine
+        logger.info("⏳ Pre-loading RAG engine…")
         get_rag_engine()
         logger.info("✅ RAG engine ready")
     except Exception as exc:
         logger.error(f"⚠️  RAG engine warm-up failed: {exc}")
 
+    try:
+        get_video_generator()
+        logger.info("✅ VideoGenerator ready")
+    except Exception as exc:
+        logger.error(f"⚠️  VideoGenerator warm-up failed: {exc}")
 
-# Lifespan context manager for startup/shutdown events
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application lifecycle"""
-    # Startup
-    logger.info("🚀 Starting Ephemeral Intent Synthesis System...")
-    logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    logger.info(f"API Host: {os.getenv('API_HOST', '0.0.0.0')}:{os.getenv('API_PORT', '8000')}")
+    logger.info("🚀 Starting Ephemeral Intent Synthesis System…")
 
-    # Kick off heavy service initialisation in the background so the server
-    # starts accepting connections immediately.  The first WS client that
-    # arrives before warm-up finishes gets a friendly "not ready" message.
+    # Heavy sync work (embedding model, ChromaDB) runs in a thread so the
+    # server starts accepting requests immediately.
     t = threading.Thread(target=_warm_up_services, daemon=True)
     t.start()
 
+    # Async startup — must happen here where the event loop is running.
+    try:
+        lm = get_lifecycle_manager()
+        lm.start_monitoring()
+        logger.info("✅ LifecycleManager monitoring started")
+    except Exception as exc:
+        logger.error(f"⚠️  LifecycleManager startup failed: {exc}")
+
     yield
 
-    # Shutdown
-    logger.info("🛑 Shutting down Ephemeral Intent Synthesis System...")
+    logger.info("🛑 Shutting down…")
+    try:
+        get_lifecycle_manager().stop_monitoring()
+    except Exception:
+        pass
 
 
-# Create FastAPI application
 app = FastAPI(
     title="Ephemeral Intent Synthesis System",
     description="AI-powered biometric-adaptive educational interface system",
     version="1.0.0",
     docs_url="/docs" if os.getenv("ENABLE_DOCS", "true").lower() == "true" else None,
     redoc_url="/redoc" if os.getenv("ENABLE_DOCS", "true").lower() == "true" else None,
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-
-# Configure CORS
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -83,13 +116,19 @@ app.add_middleware(
 )
 
 
-# Health check endpoint
+# ---------------------------------------------------------------------------
+# System endpoints
+# ---------------------------------------------------------------------------
+
 @app.get("/health", tags=["System"])
 async def health_check() -> Dict[str, Any]:
-    """
-    Health check endpoint
-    Returns system status and component health
-    """
+    """Health check — uses pre-initialised singletons, no extra work."""
+    vg = get_video_generator()
+    video_status = (
+        "ready" if vg.is_ready()
+        else "disabled" if not vg.enabled
+        else "not_configured"
+    )
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
@@ -97,180 +136,133 @@ async def health_check() -> Dict[str, Any]:
         "environment": os.getenv("ENVIRONMENT", "development"),
         "components": {
             "api": "operational",
-            "biometric_analyzer": "ready",
-            "rag_engine": "ready",
-            "ui_orchestrator": "ready"
-        }
+            "rag_engine": "ready" if is_rag_ready() else "warming_up",
+            "video_generator": video_status,
+            "lifecycle_manager": "monitoring",
+        },
     }
 
 
-# Root endpoint
 @app.get("/", tags=["System"])
 async def root() -> Dict[str, Any]:
-    """
-    Root endpoint with API information
-    """
     return {
         "name": "Ephemeral Intent Synthesis System",
-        "description": "AI-powered biometric-adaptive educational interface",
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": {
-            "biometric_analysis": "/api/v1/biometric/analyze",
-            "knowledge_query": "/api/v1/knowledge/query",
-            "ui_orchestration": "/api/v1/ui/orchestrate",
-            "websocket": "/ws"
-        }
+        "websocket": "/ws/{session_id}",
     }
 
 
-# System info endpoint
 @app.get("/api/v1/system/info", tags=["System"])
 async def system_info() -> Dict[str, Any]:
-    """
-    Get detailed system information
-    """
+    lm = get_lifecycle_manager()
     return {
         "system": {
             "name": "Ephemeral Intent Synthesis System",
             "version": "1.0.0",
-            "environment": os.getenv("ENVIRONMENT", "development")
+            "environment": os.getenv("ENVIRONMENT", "development"),
         },
-        "features": {
-            "biometric_analysis": {
-                "enabled": True,
-                "description": "Real-time facial analysis and cognitive load detection"
-            },
-            "rag_engine": {
-                "enabled": True,
-                "mock_mode": os.getenv("MOCK_MODE", "false").lower() == "true",
-                "description": "Knowledge retrieval and synthesis"
-            },
-            "ui_orchestration": {
-                "enabled": True,
-                "description": "Dynamic UI generation based on biometric context"
-            },
-            "lifecycle_management": {
-                "enabled": True,
-                "description": "Session monitoring and resource cleanup"
-            }
+        "runtime": {
+            "rag_ready": is_rag_ready(),
+            "active_sessions": lm.get_active_sessions_count(),
+            "ollama_model": os.getenv("OLLAMA_MODEL", "phi3:mini"),
+            "video_enabled": os.getenv("VIDEO_ENABLED", "false").lower() == "true",
         },
-        "configuration": {
-            "cors_enabled": True,
-            "docs_enabled": os.getenv("ENABLE_DOCS", "true").lower() == "true",
-            "metrics_enabled": os.getenv("ENABLE_METRICS", "true").lower() == "true"
-        }
     }
 
 
-# Biometric analysis endpoint (placeholder)
-@app.post("/api/v1/biometric/analyze", tags=["Biometric"])
-async def analyze_biometric(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Analyze biometric data
-    
-    This endpoint will process facial landmarks and return cognitive load analysis
-    """
-    # TODO: Implement full biometric analysis
-    return {
-        "status": "success",
-        "message": "Biometric analysis endpoint - implementation pending",
-        "session_id": data.get("session_id", "unknown")
-    }
+# ---------------------------------------------------------------------------
+# Session endpoints (backed by LifecycleManager)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/sessions", tags=["Sessions"])
+async def list_sessions() -> Dict[str, Any]:
+    """Return all active sessions."""
+    lm = get_lifecycle_manager()
+    return {"sessions": lm.get_all_sessions(), "count": lm.get_active_sessions_count()}
 
 
-# Knowledge query endpoint (placeholder)
-@app.post("/api/v1/knowledge/query", tags=["Knowledge"])
-async def query_knowledge(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Query knowledge base and synthesize teaching modules
-    
-    This endpoint will use RAG to retrieve and synthesize educational content
-    """
-    # TODO: Implement full RAG query
-    return {
-        "status": "success",
-        "message": "Knowledge query endpoint - implementation pending",
-        "query": data.get("query", "unknown")
-    }
+@app.get("/api/v1/sessions/{session_id}", tags=["Sessions"])
+async def get_session(session_id: str) -> Dict[str, Any]:
+    """Return a single session by ID."""
+    lm = get_lifecycle_manager()
+    session = lm.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.to_dict()
 
 
-# UI orchestration endpoint (placeholder)
-@app.post("/api/v1/ui/orchestrate", tags=["UI"])
-async def orchestrate_ui(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Generate dynamic UI configuration based on biometric context
-    
-    This endpoint will create adaptive UI components
-    """
-    # TODO: Implement full UI orchestration
-    return {
-        "status": "success",
-        "message": "UI orchestration endpoint - implementation pending",
-        "session_id": data.get("session_id", "unknown")
-    }
+@app.delete("/api/v1/sessions/{session_id}", tags=["Sessions"])
+async def terminate_session(session_id: str) -> Dict[str, Any]:
+    """Manually terminate a session and free its resources."""
+    lm = get_lifecycle_manager()
+    success = lm.terminate_session(session_id, reason="api_request")
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"terminated": True, "session_id": session_id}
 
 
+# ---------------------------------------------------------------------------
 # Error handlers
+# ---------------------------------------------------------------------------
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
-    """Handle HTTP exceptions"""
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        content={"error": exc.detail, "status_code": exc.status_code, "timestamp": datetime.utcnow().isoformat()},
     )
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
-    """Handle general exceptions"""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
             "message": str(exc) if os.getenv("DEBUG", "false").lower() == "true" else "An error occurred",
-            "timestamp": datetime.utcnow().isoformat()
-        }
+            "timestamp": datetime.utcnow().isoformat(),
+        },
     )
 
 
-# WebSocket endpoint
+# ---------------------------------------------------------------------------
+# WebSocket
+# ---------------------------------------------------------------------------
+
 @app.websocket("/ws/{session_id}")
 async def websocket_route(websocket: WebSocket, session_id: str):
     """
-    WebSocket endpoint for real-time communication
-    
-    Connect to: ws://localhost:8000/ws/{session_id}
-    
-    Supported message types:
-    - biometric_analysis: Analyze facial landmarks
-    - knowledge_query: Query knowledge base
-    - full_pipeline: Run complete analysis pipeline
-    - ping: Health check
+    Real-time pipeline endpoint.
+
+    Message types:
+      full_pipeline       — complete biometric → knowledge → UI pipeline
+      biometric_analysis  — biometric step only
+      knowledge_query     — knowledge step only
+      ping                — keepalive heartbeat
     """
     await websocket_endpoint(websocket, session_id)
 
 
-# Run with: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# ---------------------------------------------------------------------------
+# Dev entrypoint
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     import uvicorn
-    
-    host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("API_PORT", "8000"))
-    reload = os.getenv("API_RELOAD", "true").lower() == "true"
-    
+    from pathlib import Path
+
+    backend_dir = str(Path(__file__).resolve().parent.parent)
     uvicorn.run(
         "app.main:app",
-        host=host,
-        port=port,
-        reload=reload,
-        log_level="info"
+        host=os.getenv("API_HOST", "0.0.0.0"),
+        port=int(os.getenv("API_PORT", "8000")),
+        reload=os.getenv("API_RELOAD", "true").lower() == "true",
+        reload_dirs=[backend_dir],
+        app_dir=backend_dir,
+        log_level="info",
     )
 
 # Made with Bob

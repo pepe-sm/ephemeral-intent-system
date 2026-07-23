@@ -11,6 +11,7 @@ import type {
   WebSocketMessage,
   BiometricToken,
   KnowledgePayload,
+  TeachingModule,
   UIComponentTree,
   FaceLandmark,
 } from '@/types';
@@ -20,6 +21,7 @@ interface UseWebSocketOptions {
   autoConnect?: boolean;
   onBiometricToken?: (token: BiometricToken) => void;
   onKnowledgePayload?: (payload: KnowledgePayload) => void;
+  onModuleStream?: (module: TeachingModule, index: number, isFirst: boolean) => void;
   onUIUpdate?: (componentTree: UIComponentTree) => void;
   onSessionComplete?: () => void;
   onPipelineStatus?: (step: string, status: string) => void;
@@ -30,12 +32,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const {
     sessionId,
     autoConnect = true,
-    onBiometricToken,
-    onKnowledgePayload,
-    onUIUpdate,
-    onSessionComplete,
-    onPipelineStatus,
-    onError,
   } = options;
 
   const wsServiceRef = useRef(getWebSocketService({ url: config.ws_url }));
@@ -47,85 +43,87 @@ export function useWebSocket(options: UseWebSocketOptions) {
     updateSessionStatus,
   } = useAppStore();
 
-  // Handle incoming messages
+  // Keep callback refs fresh so handleMessage never closes over stale props.
+  // This is the canonical fix for stale-closure bugs with event handlers.
+  const cbRef = useRef(options);
+  useEffect(() => { cbRef.current = options; });
+
+  // Stable message handler — never re-created, always reads latest callbacks via cbRef.
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
-      console.log('WebSocket message received:', message.type, message);
+      const cb = cbRef.current;
+      console.log('WebSocket message received:', message.type);
 
       switch (message.type) {
-        case WS_MESSAGE_TYPES.BIOMETRIC_TOKEN:
-          console.log('Processing biometric token:', message.data);
+        case WS_MESSAGE_TYPES.BIOMETRIC_TOKEN: {
           const biometricToken = message.data as BiometricToken;
           setBiometricToken(biometricToken);
-          onBiometricToken?.(biometricToken);
+          cb.onBiometricToken?.(biometricToken);
           updateSessionStatus('analyzing');
           break;
+        }
 
-        case WS_MESSAGE_TYPES.KNOWLEDGE_PAYLOAD:
-          console.log('Processing knowledge payload:', message.data);
+        case WS_MESSAGE_TYPES.MODULE_STREAM: {
+          const streamData = message.data;
+          const mod = streamData?.module as TeachingModule;
+          if (mod) {
+            cb.onModuleStream?.(mod, streamData.index ?? 0, streamData.is_first ?? false);
+          }
+          break;
+        }
+
+        case WS_MESSAGE_TYPES.KNOWLEDGE_PAYLOAD: {
           const knowledgePayload = message.data as KnowledgePayload;
           setKnowledgePayload(knowledgePayload);
-          onKnowledgePayload?.(knowledgePayload);
+          cb.onKnowledgePayload?.(knowledgePayload);
           updateSessionStatus('generating_ui');
           break;
+        }
 
-        case WS_MESSAGE_TYPES.UI_UPDATE:
-          console.log('Processing UI update:', message.data);
+        case WS_MESSAGE_TYPES.UI_UPDATE: {
           const uiData = message.data as { component_tree: UIComponentTree };
           if (!uiData.component_tree) {
-            console.error('UI update received but component_tree is missing!', message.data);
+            console.error('ui_update missing component_tree', message.data);
             setError('Invalid UI configuration received');
             return;
           }
-          onUIUpdate?.(uiData.component_tree);
+          cb.onUIUpdate?.(uiData.component_tree);
           updateSessionStatus('active');
           break;
+        }
 
         case WS_MESSAGE_TYPES.SESSION_COMPLETE:
-          console.log('Session complete');
-          onSessionComplete?.();
+          cb.onSessionComplete?.();
           updateSessionStatus('completing');
           break;
 
-        case WS_MESSAGE_TYPES.ERROR:
-          const errorMessage = message.data?.message || 'Unknown error occurred';
-          console.error('WebSocket error received:', errorMessage, message.data);
+        case WS_MESSAGE_TYPES.ERROR: {
+          const errorCode = message.data?.error || '';
+          const rawMsg = message.data?.message;
+          const errorMessage = rawMsg || (errorCode ? `Server error: ${errorCode}` : 'An error occurred. Please try again.');
+          console.error('WS error received:', errorMessage, message.data);
           setError(errorMessage);
-          onError?.(new Error(errorMessage));
+          cb.onError?.(new Error(errorMessage));
           break;
+        }
 
         case WS_MESSAGE_TYPES.PIPELINE_STATUS:
-          console.log('Pipeline status update:', message);
           if (message.data?.status === 'warming_up') {
             setError('⏳ Server is loading AI models — please wait a moment, then try again.');
           }
-          onPipelineStatus?.(message.data?.step ?? '', message.data?.status ?? '');
+          cb.onPipelineStatus?.(message.data?.step ?? '', message.data?.status ?? '');
           break;
 
         case WS_MESSAGE_TYPES.PIPELINE_COMPLETE:
-          console.log('Pipeline complete:', message);
-          break;
-
         case WS_MESSAGE_TYPES.CONNECTION_ESTABLISHED:
-          console.log('Connection established:', message);
           break;
 
         default:
-          console.warn('Unknown message type:', message.type, message);
+          console.warn('Unknown message type:', message.type);
       }
     },
-    [
-      setBiometricToken,
-      setKnowledgePayload,
-      setError,
-      updateSessionStatus,
-      onBiometricToken,
-      onKnowledgePayload,
-      onUIUpdate,
-      onSessionComplete,
-      onPipelineStatus,
-      onError,
-    ]
+    // Stable deps only — store setters never change
+    [setBiometricToken, setKnowledgePayload, setError, updateSessionStatus]
   );
 
   // Handle connection status
@@ -145,10 +143,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const handleError = useCallback(
     (error: Error) => {
       console.error('WebSocket error:', error);
-      setError(error.message);
-      onError?.(error);
+      const msg = error.message || 'Connection error — please refresh and try again.';
+      setError(msg);
+      cbRef.current.onError?.(error);
     },
-    [setError, onError]
+    [setError]
   );
 
   // Connect to WebSocket

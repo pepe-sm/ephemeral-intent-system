@@ -8,14 +8,7 @@ websockets==12.0
 ibm-watsonx-ai==0.2.0
 ibm-cloud-sdk-core>=3.19.0
 
-# Machine Learning & Computer Vision
-mediapipe>=0.10.13
-opencv-python>=4.9.0.80
-numpy>=1.26.3
-pillow>=10.2.0
-tensorflow>=2.15.0
-
-# RAG & LangChain (Updated for compatibility)
+# RAG & LangChain
 langchain>=0.3.0
 langchain-community>=0.3.0
 langchain-core>=1.0.0
@@ -27,17 +20,16 @@ sentence-transformers>=2.2.0
 ollama>=0.3.0
 langchain-ollama>=0.1.0
 
-# Note: langchain-ibm removed due to version conflicts
-# Will use Ollama or mock mode instead
-
 # Data Processing
+numpy>=1.26.3
+pillow>=10.2.0
 pydantic>=2.5.0,<3.0.0
 pydantic-settings>=2.1.0,<3.0.0
 python-dotenv==1.0.0
 
 # Async & Concurrency
 aiohttp==3.9.1
-asyncio==3.4.3
+# asyncio is part of Python stdlib — do NOT pin it via pip
 aiofiles==23.2.1
 
 # Caching & State Management

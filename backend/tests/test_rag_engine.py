@@ -20,9 +20,10 @@ from app.models.knowledge_payload import (
 from langchain_core.documents import Document
 
 
+@pytest.mark.slow
 class TestRAGEngineInitialization:
-    """Test RAG Engine initialization"""
-    
+    """Test RAG Engine initialization — marked slow because loading embeddings takes ~30 s."""
+
     def test_initialization_without_credentials(self):
         """Test initialization without watsonx credentials (mock mode)"""
         engine = RAGEngine()
@@ -47,6 +48,7 @@ class TestRAGEngineInitialization:
         assert engine.model_id == "custom/model"
 
 
+@pytest.mark.slow
 class TestRAGEngineQuery:
     """Test RAG Engine query functionality"""
     
@@ -375,6 +377,7 @@ class TestMockPayloadCreation:
         assert payload.session_id == request.session_id
 
 
+@pytest.mark.slow
 class TestVectorStoreOperations:
     """Test vector store operations"""
     

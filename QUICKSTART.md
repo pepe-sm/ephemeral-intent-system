@@ -99,7 +99,7 @@ python demo_biometric_standalone.py
 
 ```bash
 cd backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python run.py --host 0.0.0.0 --port 8000
 ```
 
 **Access the API:**
@@ -288,7 +288,7 @@ pip install sentence-transformers>=2.2.0
 
 **Solution:** Make sure the FastAPI server is running:
 ```bash
-uvicorn app.main:app --reload
+python run.py
 ```
 
 ---
@@ -309,7 +309,7 @@ pytest tests/ -v
 
 ```bash
 # Start server
-uvicorn app.main:app --reload
+python run.py
 
 # In another terminal, run demo
 python demo_biometric_standalone.py

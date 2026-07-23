@@ -1,423 +1,142 @@
 """
-WebSocket Endpoint for Real-Time Biometric Streaming
-Handles real-time communication between frontend and backend services
+WebSocket Endpoint
+Handles connection management and message routing only.
+All pipeline logic lives in app.api.pipeline.
 """
 
 from fastapi import WebSocket, WebSocketDisconnect
-from typing import Dict, Any, Optional
-import json
+from typing import Dict, Any
 import logging
-import asyncio
 from datetime import datetime
 
-from app.services.biometric_analyzer import BiometricAnalyzer
-from app.services.rag_engine import RAGEngine
-from app.services.ui_orchestrator import UIOrchestrator
-from app.models.biometric_token import BiometricAnalysisRequest
-from app.models.knowledge_payload import RAGQueryRequest
+from app.api.pipeline import (
+    handle_biometric_analysis,
+    handle_knowledge_query,
+    handle_full_pipeline,
+    is_rag_ready,
+    get_rag_engine,  # re-exported so main.py warm-up import still works
+)
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Connection manager
+# ---------------------------------------------------------------------------
+
 class ConnectionManager:
-    """Manage WebSocket connections"""
-    
+    """Tracks open WebSocket connections keyed by session_id."""
+
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        self.session_data: Dict[str, Dict[str, Any]] = {}
-    
-    async def connect(self, websocket: WebSocket, session_id: str):
-        """Accept and register a new WebSocket connection"""
+        self._message_counts: Dict[str, int] = {}
+
+    async def connect(self, websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
         self.active_connections[session_id] = websocket
-        self.session_data[session_id] = {
-            "connected_at": datetime.utcnow().isoformat(),
-            "message_count": 0
-        }
+        self._message_counts[session_id] = 0
         logger.info(f"WebSocket connected: {session_id}")
-    
-    def disconnect(self, session_id: str):
-        """Remove a WebSocket connection"""
-        if session_id in self.active_connections:
-            del self.active_connections[session_id]
-        if session_id in self.session_data:
-            del self.session_data[session_id]
+
+    def disconnect(self, session_id: str) -> None:
+        self.active_connections.pop(session_id, None)
+        self._message_counts.pop(session_id, None)
         logger.info(f"WebSocket disconnected: {session_id}")
-    
-    async def send_message(self, session_id: str, message: Dict[str, Any]):
-        """Send a message to a specific session"""
-        if session_id in self.active_connections:
-            websocket = self.active_connections[session_id]
-            await websocket.send_json(message)
-            self.session_data[session_id]["message_count"] += 1
-    
-    async def broadcast(self, message: Dict[str, Any]):
-        """Broadcast a message to all connected clients"""
-        for session_id, websocket in self.active_connections.items():
+
+    async def send(self, session_id: str, message: Dict[str, Any]) -> None:
+        ws = self.active_connections.get(session_id)
+        if ws:
+            await ws.send_json(message)
+            self._message_counts[session_id] = self._message_counts.get(session_id, 0) + 1
+
+    async def broadcast(self, message: Dict[str, Any]) -> None:
+        for sid, ws in list(self.active_connections.items()):
             try:
-                await websocket.send_json(message)
-            except Exception as e:
-                logger.error(f"Error broadcasting to {session_id}: {e}")
+                await ws.send_json(message)
+            except Exception as exc:
+                logger.error(f"Broadcast error to {sid}: {exc}")
 
 
-# Global connection manager
 manager = ConnectionManager()
 
-# Initialize services (lazy loading)
-biometric_analyzer: Optional[BiometricAnalyzer] = None
-rag_engine: Optional[RAGEngine] = None
-ui_orchestrator: Optional[UIOrchestrator] = None
 
+# ---------------------------------------------------------------------------
+# Main endpoint
+# ---------------------------------------------------------------------------
 
-def get_biometric_analyzer() -> BiometricAnalyzer:
-    """Get or create biometric analyzer instance"""
-    global biometric_analyzer
-    if biometric_analyzer is None:
-        biometric_analyzer = BiometricAnalyzer()
-        logger.info("BiometricAnalyzer initialized")
-    return biometric_analyzer
-
-
-def get_rag_engine() -> RAGEngine:
-    """Get or create RAG engine instance.
-    NOTE: first call blocks while loading embeddings model + ChromaDB (~30 s).
-    main.py kicks this off in a background thread at startup so it is usually
-    ready by the time the first browser connection arrives.
+async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     """
-    global rag_engine
-    if rag_engine is None:
-        rag_engine = RAGEngine()
-        logger.info("RAGEngine initialized")
-    return rag_engine
+    WebSocket entry point.  Accepts the connection, routes messages to
+    pipeline handlers, and cleans up on disconnect.
 
-
-def is_rag_ready() -> bool:
-    """Return True once the RAGEngine singleton has been created."""
-    return rag_engine is not None
-
-
-def get_ui_orchestrator() -> UIOrchestrator:
-    """Get or create UI orchestrator instance"""
-    global ui_orchestrator
-    if ui_orchestrator is None:
-        ui_orchestrator = UIOrchestrator()
-        logger.info("UIOrchestrator initialized")
-    return ui_orchestrator
-
-
-async def handle_biometric_analysis(session_id: str, data: Dict[str, Any]):
-    """Handle biometric analysis request"""
-    try:
-        analyzer = get_biometric_analyzer()
-        
-        # Create analysis request
-        request = BiometricAnalysisRequest(
-            session_id=session_id,
-            landmarks=data.get("landmarks", []),
-            frame_count=data.get("frame_count", 0),
-            capture_duration=data.get("capture_duration", 0.0),
-            timestamp=datetime.utcnow()
-        )
-        
-        # Analyze
-        token = analyzer.analyze(request)
-        
-        # Send response with correct message type
-        await manager.send_message(session_id, {
-            "type": "biometric_token",
-            "data": {
-                "session_id": token.session_id,
-                "cognitive_load": token.cognitive_load.value,
-                "urgency": token.urgency.value,
-                "attention_score": token.attention_score,
-                "confidence": token.confidence,
-                "stress_indicators": {
-                    "blink_rate": token.stress_indicators.blink_rate,
-                    "gaze_stability": token.stress_indicators.gaze_stability,
-                    "micro_tension": token.stress_indicators.micro_tension,
-                    "eye_aspect_ratio": token.stress_indicators.eye_aspect_ratio,
-                    "head_pose_stability": token.stress_indicators.head_pose_stability
-                },
-                "timestamp": token.timestamp.isoformat()
-            }
-        })
-        
-        return token
-        
-    except Exception as e:
-        logger.error(f"Error in biometric analysis: {e}", exc_info=True)
-        await manager.send_message(session_id, {
-            "type": "error",
-            "error": "biometric_analysis_failed",
-            "message": str(e)
-        })
-        return None
-
-
-async def handle_knowledge_query(session_id: str, data: Dict[str, Any], biometric_token=None):
-    """Handle knowledge query request"""
-    try:
-        engine = get_rag_engine()
-        
-        # Create query request
-        request = RAGQueryRequest(
-            session_id=session_id,
-            query=data.get("query", ""),
-            context=data.get("context"),
-            max_sources=data.get("max_sources", 5),
-            complexity_preference=data.get("complexity_preference")
-        )
-        
-        logger.info(f"Querying RAG engine for: {request.query}")
-        
-        # Query knowledge base
-        response = await engine.query(request)
-        
-        logger.info(f"RAG response received - success: {response.success}, modules: {len(response.knowledge_payload.teaching_modules)}")
-        
-        # Check if response is valid
-        if not response.knowledge_payload or not response.knowledge_payload.teaching_modules:
-            logger.error(f"RAG returned empty knowledge payload for session {session_id}")
-            await manager.send_message(session_id, {
-                "type": "error",
-                "error": "empty_knowledge_payload",
-                "message": "Knowledge base returned no content. Please try a different query or check if the knowledge base is populated."
-            })
-            return None
-        
-        # Send response with correct message type
-        logger.info(f"Sending knowledge payload with {len(response.knowledge_payload.teaching_modules)} modules")
-        await manager.send_message(session_id, {
-            "type": "knowledge_payload",
-            "data": {
-                "session_id": response.session_id,
-                "success": response.success,
-                "core_concept": response.knowledge_payload.core_concept,
-                "complexity_level": response.knowledge_payload.complexity_level.value,
-                "teaching_modules": [
-                    {
-                        "module_id": m.module_id,
-                        "type": m.type.value,
-                        "title": m.title,
-                        "content": m.content,
-                        "estimated_time": m.estimated_time,
-                        "order": m.order
-                    }
-                    for m in response.knowledge_payload.teaching_modules
-                ],
-                "total_estimated_time": response.knowledge_payload.total_estimated_time,
-                "processing_time_ms": response.processing_time_ms
-            }
-        })
-        
-        logger.info(f"Knowledge payload sent successfully for session {session_id}")
-        return response.knowledge_payload
-        
-    except Exception as e:
-        logger.error(f"Error in knowledge query: {e}", exc_info=True)
-        await manager.send_message(session_id, {
-            "type": "error",
-            "error": "knowledge_query_failed",
-            "message": str(e)
-        })
-        return None
-
-
-async def handle_ui_orchestration(session_id: str, biometric_token, knowledge_payload):
-    """Handle UI orchestration request"""
-    try:
-        logger.info(f"UI orchestration handler called for session {session_id}")
-        orchestrator = get_ui_orchestrator()
-        logger.info(f"UI orchestrator obtained for session {session_id}")
-        
-        # Orchestrate UI
-        logger.info(f"Calling orchestrator.orchestrate for session {session_id}")
-        ui_config = orchestrator.orchestrate(biometric_token, knowledge_payload)
-        logger.info(f"Orchestrator returned config for session {session_id}: {ui_config is not None}")
-        
-        # Restructure to match frontend expectations
-        # Frontend expects: { root: {...}, presentation_config: {...} }
-        component_tree_data = {
-            "root": ui_config.get("component_tree", {}),
-            "presentation_config": ui_config.get("presentation_config", {})
-        }
-        
-        # Send response with correct message type and structure
-        logger.info(f"Sending UI update message for session {session_id}")
-        logger.info(f"Component tree data keys: {component_tree_data.keys()}")
-        await manager.send_message(session_id, {
-            "type": "ui_update",
-            "data": {
-                "component_tree": component_tree_data
-            }
-        })
-        logger.info(f"UI update message sent successfully for session {session_id}")
-        
-        return ui_config
-        
-    except Exception as e:
-        logger.error(f"Error in UI orchestration: {e}", exc_info=True)
-        await manager.send_message(session_id, {
-            "type": "error",
-            "error": "ui_orchestration_failed",
-            "message": str(e)
-        })
-        return None
-
-
-async def handle_full_pipeline(session_id: str, data: Dict[str, Any]):
-    """Handle full pipeline: biometric -> knowledge -> UI"""
-    try:
-        # Step 1: Biometric Analysis
-        await manager.send_message(session_id, {
-            "type": "pipeline_status",
-            "step": "biometric_analysis",
-            "status": "processing"
-        })
-        
-        # Extract biometric data from flat structure
-        biometric_data = {
-            "landmarks": data.get("landmarks", []),
-            "frame_count": data.get("frame_count", 0),
-            "capture_duration": data.get("capture_duration", 0.0)
-        }
-        
-        biometric_token = await handle_biometric_analysis(session_id, biometric_data)
-        if not biometric_token:
-            return
-        
-        # Step 2: Knowledge Query
-        await manager.send_message(session_id, {
-            "type": "pipeline_status",
-            "step": "knowledge_query",
-            "status": "processing"
-        })
-        
-        # Extract query data from flat structure
-        query_data = {
-            "query": data.get("query", ""),
-            "session_id": session_id
-        }
-        
-        knowledge_payload = await handle_knowledge_query(
-            session_id,
-            query_data,
-            biometric_token
-        )
-        if not knowledge_payload:
-            # Send error message to frontend
-            await manager.send_message(session_id, {
-                "type": "error",
-                "error": "knowledge_query_failed",
-                "message": "Failed to generate knowledge payload. The knowledge base may be empty or the query failed."
-            })
-            logger.error(f"Knowledge query returned None for session {session_id}")
-            return
-        
-        # Step 3: UI Orchestration
-        logger.info(f"Starting UI orchestration for session {session_id}")
-        await manager.send_message(session_id, {
-            "type": "pipeline_status",
-            "step": "ui_orchestration",
-            "status": "processing"
-        })
-        
-        ui_config = await handle_ui_orchestration(session_id, biometric_token, knowledge_payload)
-        logger.info(f"UI orchestration completed for session {session_id}, config: {ui_config is not None}")
-        if not ui_config:
-            # Send error message to frontend
-            await manager.send_message(session_id, {
-                "type": "error",
-                "error": "ui_orchestration_failed",
-                "message": "Failed to generate UI configuration."
-            })
-            logger.error(f"UI orchestration returned None for session {session_id}")
-            return
-        
-        # Pipeline complete
-        await manager.send_message(session_id, {
-            "type": "pipeline_complete",
-            "status": "success"
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in full pipeline: {e}", exc_info=True)
-        await manager.send_message(session_id, {
-            "type": "error",
-            "error": "pipeline_failed",
-            "message": str(e)
-        })
-
-
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """
-    Main WebSocket endpoint handler
-    
-    Handles real-time communication for:
-    - Biometric data streaming
-    - Knowledge queries
-    - UI orchestration
-    - Full pipeline execution
+    Message types handled:
+      full_pipeline       — biometric + knowledge + UI in one shot
+      biometric_analysis  — biometric step only
+      knowledge_query     — knowledge step only
+      ping                — keepalive
     """
     await manager.connect(websocket, session_id)
 
+    # Convenience closure so pipeline handlers can call manager.send
+    async def send(sid: str, payload: Dict[str, Any]) -> None:
+        await manager.send(sid, payload)
+
     try:
-        # If the RAG engine hasn't finished loading yet, tell the client and
-        # keep the connection open so it can retry without reconnecting.
+        # Warn if the RAG engine is still warming up
         if not is_rag_ready():
-            await manager.send_message(session_id, {
+            await send(session_id, {
                 "type": "pipeline_status",
-                "step": "startup",
-                "status": "warming_up",
-                "message": "Server is loading AI models, please wait a few seconds and try again."
+                "data": {
+                    "step": "startup",
+                    "status": "warming_up",
+                    "message": "Server is loading AI models — please wait a moment, then try again.",
+                },
             })
 
-        # Send welcome message
-        await manager.send_message(session_id, {
+        await send(session_id, {
             "type": "connection_established",
-            "session_id": session_id,
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "WebSocket connection established"
+            "data": {
+                "session_id": session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "WebSocket connection established",
+            },
         })
-        
+
         # Message loop
         while True:
-            # Receive message
             data = await websocket.receive_json()
-            message_type = data.get("type")
-            
-            logger.info(f"Received message type: {message_type} from {session_id}")
-            
-            # Route message to appropriate handler
-            if message_type == "biometric_analysis":
-                await handle_biometric_analysis(session_id, data.get("data", {}))
-            
-            elif message_type == "knowledge_query":
-                await handle_knowledge_query(session_id, data.get("data", {}))
-            
-            elif message_type == "full_pipeline":
-                await handle_full_pipeline(session_id, data.get("data", {}))
-            
-            elif message_type == "ping":
-                await manager.send_message(session_id, {
+            msg_type = data.get("type")
+            logger.info(f"Message [{msg_type}] from {session_id}")
+
+            if msg_type == "full_pipeline":
+                await handle_full_pipeline(send, session_id, data.get("data", {}))
+
+            elif msg_type == "biometric_analysis":
+                await handle_biometric_analysis(send, session_id, data.get("data", {}))
+
+            elif msg_type == "knowledge_query":
+                await handle_knowledge_query(send, session_id, data.get("data", {}))
+
+            elif msg_type == "ping":
+                await send(session_id, {
                     "type": "pong",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "data": {"timestamp": datetime.utcnow().isoformat()},
                 })
-            
+
             else:
-                await manager.send_message(session_id, {
+                await send(session_id, {
                     "type": "error",
-                    "error": "unknown_message_type",
-                    "message": f"Unknown message type: {message_type}"
+                    "data": {
+                        "error": "unknown_message_type",
+                        "message": f"Unknown message type: {msg_type}",
+                    },
                 })
-    
+
     except WebSocketDisconnect:
         manager.disconnect(session_id)
-        logger.info(f"Client disconnected: {session_id}")
-    
-    except Exception as e:
-        logger.error(f"WebSocket error for {session_id}: {e}", exc_info=True)
+
+    except Exception as exc:
+        logger.error(f"WebSocket error [{session_id}]: {exc}", exc_info=True)
         manager.disconnect(session_id)
 
 
-# Made with Bob for IBM AI Builders Challenge
+# Made with Bob

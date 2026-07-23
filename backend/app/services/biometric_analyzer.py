@@ -52,63 +52,53 @@ class BiometricAnalyzer:
     
     def analyze(self, request: BiometricAnalysisRequest) -> BiometricToken:
         """
-        Main analysis method - processes landmarks and generates biometric token
-        
-        Args:
-            request: BiometricAnalysisRequest containing landmarks and metadata
-            
-        Returns:
-            BiometricToken with complete analysis
+        Main analysis method — processes landmarks and generates biometric token.
+
+        When no landmarks are provided (camera not used / not available) a safe
+        default token is returned so the pipeline can continue normally.
         """
         start_time = datetime.utcnow()
-        
+
+        # No camera data — return a sensible default so the pipeline continues.
+        if not request.landmarks or request.frame_count == 0:
+            logger.info(
+                f"No landmark data for session {request.session_id} — "
+                "using default biometric token (camera not active)"
+            )
+            return self._default_token(request, start_time)
+
         try:
-            # Convert landmarks to numpy array for processing
             landmarks_array = np.array(request.landmarks)
-            
-            # Calculate individual metrics
+
             ear = self._calculate_eye_aspect_ratio(landmarks_array)
             blink_rate = self._estimate_blink_rate(landmarks_array, request.capture_duration)
             gaze_stability = self._calculate_gaze_stability(landmarks_array)
             micro_tension = self._calculate_micro_tension(landmarks_array)
             head_pose_stability = self._calculate_head_pose_stability(landmarks_array)
-            
-            # Calculate attention score (composite metric)
+
             attention_score = self._calculate_attention_score(
                 ear, gaze_stability, head_pose_stability
             )
-            
-            # Classify cognitive load
             cognitive_load = self._classify_cognitive_load(
                 ear, blink_rate, gaze_stability, micro_tension
             )
-            
-            # Classify urgency
             urgency = self._classify_urgency(
                 blink_rate, micro_tension, attention_score
             )
-            
-            # Calculate confidence in analysis
             confidence = self._calculate_confidence(
                 request.frame_count, landmarks_array
             )
-            
-            # Create stress indicators
+
             stress_indicators = StressIndicators(
                 blink_rate=blink_rate,
                 gaze_stability=gaze_stability,
                 micro_tension=micro_tension,
                 eye_aspect_ratio=ear,
-                head_pose_stability=head_pose_stability
+                head_pose_stability=head_pose_stability,
             )
-            
-            # Optional: Emotion analysis (simplified for POC)
             emotion_scores = self._analyze_emotions(landmarks_array)
-            
-            # Calculate processing time
             processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
-            
-            # Create biometric token
+
             token = BiometricToken(
                 session_id=request.session_id,
                 cognitive_load=cognitive_load,
@@ -122,21 +112,52 @@ class BiometricAnalyzer:
                     "frames_processed": request.frame_count,
                     "processing_time_ms": processing_time,
                     "landmarks_detected": len(landmarks_array),
-                    "capture_duration": request.capture_duration
-                }
+                    "capture_duration": request.capture_duration,
+                },
             )
-            
+
             logger.info(
-                f"Biometric analysis complete for session {request.session_id}: "
+                f"Biometric analysis complete [{request.session_id}]: "
                 f"cognitive_load={cognitive_load}, urgency={urgency}, "
                 f"attention={attention_score:.2f}"
             )
-            
             return token
-            
+
         except Exception as e:
-            logger.error(f"Error in biometric analysis: {str(e)}", exc_info=True)
-            raise
+            logger.warning(
+                f"Biometric analysis failed [{request.session_id}]: {e} — "
+                "falling back to default token"
+            )
+            return self._default_token(request, start_time)
+
+    def _default_token(self, request: BiometricAnalysisRequest, start_time) -> BiometricToken:
+        """
+        Returns a safe neutral BiometricToken when no camera data is available.
+        Represents a calm, medium-attention state so the UI adapts reasonably.
+        """
+        processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        return BiometricToken(
+            session_id=request.session_id,
+            cognitive_load=CognitiveLoad.MEDIUM,
+            urgency=Urgency.LOW,
+            attention_score=0.7,
+            stress_indicators=StressIndicators(
+                blink_rate=15.0,
+                gaze_stability=0.8,
+                micro_tension=0.3,
+                eye_aspect_ratio=0.3,
+                head_pose_stability=0.8,
+            ),
+            confidence=0.0,  # 0 signals "no real data"
+            timestamp=request.timestamp,
+            metadata={
+                "frames_processed": 0,
+                "processing_time_ms": processing_time,
+                "landmarks_detected": 0,
+                "capture_duration": 0.0,
+                "source": "default_no_camera",
+            },
+        )
     
     def _calculate_eye_aspect_ratio(self, landmarks: np.ndarray) -> float:
         """

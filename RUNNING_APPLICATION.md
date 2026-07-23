@@ -182,7 +182,7 @@ Both servers support hot reload:
 Enable debug logging:
 ```bash
 # Backend
-DEBUG=true uvicorn app.main:app --reload
+DEBUG=true python run.py
 
 # Frontend
 # Already enabled in development mode
@@ -289,7 +289,7 @@ rm -rf frontend/node_modules/.vite
 ```bash
 # Terminal 1 (Backend)
 cd backend
-uvicorn app.main:app --reload
+python run.py
 
 # Terminal 2 (Frontend)
 cd frontend

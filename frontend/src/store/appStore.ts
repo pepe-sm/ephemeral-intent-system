@@ -24,6 +24,8 @@ interface AppStore extends AppState {
   // Actions
   reset: () => void;
   completeModule: (moduleId: string) => void;
+  // Called once on app mount to fix any stale persisted state
+  rehydrate: () => void;
 }
 
 const initialState = {
@@ -108,14 +110,26 @@ export const useAppStore = create<AppStore>()(
 
         // Reset state
         reset: () => set(initialState),
+
+        // Sanitise persisted state on app load.
+        // knowledgePayload and uiComponentTree are never persisted, so if
+        // labView is 'learning' after a page refresh there is nothing to show.
+        // Drop back to 'topic' (or 'register' if no student) so the UI always
+        // has a usable entry point.
+        rehydrate: () =>
+          set((state) => {
+            if (state.labView === 'learning' || state.labView === 'complete') {
+              return { labView: state.student ? ('topic' as LabView) : ('register' as LabView) };
+            }
+            return {};
+          }),
       }),
       {
         name: 'ephemeral-intent-storage',
         partialize: (state) => ({
-          // Persist session and student registration across page refreshes
-          session: state.session,
+          // Persist student registration only — labView is intentionally
+          // excluded so the app always starts at a known, safe view.
           student: state.student,
-          labView: state.labView,
         }),
       }
     ),

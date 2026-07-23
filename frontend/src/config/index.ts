@@ -62,6 +62,7 @@ export const WS_MESSAGE_TYPES = {
   ENGAGEMENT_SIGNAL: 'engagement_signal',
   BIOMETRIC_TOKEN: 'biometric_token',
   KNOWLEDGE_PAYLOAD: 'knowledge_payload',
+  MODULE_STREAM: 'module_stream',
   UI_UPDATE: 'ui_update',
   SESSION_COMPLETE: 'session_complete',
   PIPELINE_STATUS: 'pipeline_status',

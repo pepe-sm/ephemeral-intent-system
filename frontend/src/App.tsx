@@ -2,233 +2,26 @@
  * Main App Component — Student Lab Registration Flow
  * Ephemeral Intent Synthesis System
  *
- * Flow: Register → Pick Topic → Learning Session → Complete
+ * Flow: Register / Login → Pick Topic → Learning Session → Complete
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { RegistrationPanel } from '@/components/RegistrationPanel';
+import { TopicPanel } from '@/components/TopicPanel';
 import { DynamicUIRenderer } from '@/components/DynamicUI/DynamicUIRenderer';
 import { useAppStore, selectCurrentModule } from '@/store/appStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { config } from '@/config';
 import type { UIComponentTree, StudentRegistration } from '@/types';
-import { Brain, Wifi, WifiOff, AlertCircle, BookOpen, CheckCircle, User, LogOut } from 'lucide-react';
+import { Brain, Wifi, WifiOff, AlertCircle, CheckCircle, LogOut } from 'lucide-react';
 
-// Predefined lab courses for the registration form
-const LAB_COURSES = [
-  'Introduction to Programming',
-  'Data Structures & Algorithms',
-  'Web Development',
-  'Database Systems',
-  'Computer Networks',
-  'Operating Systems',
-  'Software Engineering',
-  'Artificial Intelligence',
-  'Machine Learning',
-  'Cybersecurity',
-];
-
-const LAB_GROUPS = ['Group A', 'Group B', 'Group C', 'Group D', 'Group E', 'Group F'];
-
-// ────────────────────────────────────────────────────────────────────────────
-// Registration Panel
-// ────────────────────────────────────────────────────────────────────────────
-function RegistrationPanel({
-  onRegister,
-}: {
-  onRegister: (s: StudentRegistration) => void;
-}) {
-  const [form, setForm] = useState({
-    studentId: '',
-    fullName: '',
-    labGroup: LAB_GROUPS[0],
-    course: LAB_COURSES[0],
-  });
-  const [error, setError] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.studentId.trim()) { setError('Student ID is required.'); return; }
-    if (!form.fullName.trim()) { setError('Full name is required.'); return; }
-    setError('');
-    onRegister({ ...form, registeredAt: new Date().toISOString() });
-  };
-
-  return (
-    <div className="max-w-lg mx-auto bg-white rounded-2xl shadow-lg p-8">
-      <div className="flex items-center gap-3 mb-6">
-        <User className="w-6 h-6 text-blue-600" />
-        <h2 className="text-2xl font-bold text-gray-900">Student Lab Registration</h2>
-      </div>
-      <p className="text-gray-500 mb-6 text-sm">
-        Register to start your personalised learning session. No camera required.
-      </p>
-
-      {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          {error}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Student ID *</label>
-          <input
-            type="text"
-            value={form.studentId}
-            onChange={e => setForm(f => ({ ...f, studentId: e.target.value }))}
-            placeholder="e.g. s12345678"
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
-          <input
-            type="text"
-            value={form.fullName}
-            onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))}
-            placeholder="e.g. Jane Smith"
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Lab Group</label>
-            <select
-              value={form.labGroup}
-              onChange={e => setForm(f => ({ ...f, labGroup: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm bg-white"
-            >
-              {LAB_GROUPS.map(g => <option key={g}>{g}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Course</label>
-            <select
-              value={form.course}
-              onChange={e => setForm(f => ({ ...f, course: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm bg-white"
-            >
-              {LAB_COURSES.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
-        <button
-          type="submit"
-          className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors text-sm mt-2"
-        >
-          Register &amp; Start Lab
-        </button>
-      </form>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Topic Selection Panel
-// ────────────────────────────────────────────────────────────────────────────
-function TopicPanel({
-  student,
-  onSubmit,
-  isLoading,
-  wsConnected,
-  loadingStep,
-}: {
-  student: StudentRegistration;
-  onSubmit: (query: string) => void;
-  isLoading: boolean;
-  wsConnected: boolean;
-  loadingStep: string;
-}) {
-  const [query, setQuery] = useState('');
-  const [error, setError] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) { setError('Please enter a topic or question.'); return; }
-    setError('');
-    onSubmit(query.trim());
-  };
-
-  return (
-    <div className="max-w-2xl mx-auto">
-      {/* Student badge */}
-      <div className="bg-white rounded-xl shadow-sm p-4 mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-            <User className="w-5 h-5 text-blue-600" />
-          </div>
-          <div>
-            <p className="font-semibold text-gray-900 text-sm">{student.fullName}</p>
-            <p className="text-xs text-gray-500">{student.studentId} · {student.labGroup} · {student.course}</p>
-          </div>
-        </div>
-        {wsConnected ? (
-          <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
-            <Wifi className="w-4 h-4" /> Live
-          </span>
-        ) : (
-          <span className="flex items-center gap-1.5 text-xs text-amber-600 font-medium">
-            <WifiOff className="w-4 h-4" /> Connecting…
-          </span>
-        )}
-      </div>
-
-      {/* Topic form */}
-      <div className="bg-white rounded-2xl shadow-lg p-8">
-        <div className="flex items-center gap-3 mb-2">
-          <BookOpen className="w-6 h-6 text-blue-600" />
-          <h2 className="text-xl font-bold text-gray-900">What would you like to learn?</h2>
-        </div>
-        <p className="text-gray-500 text-sm mb-6">
-          Enter any topic, concept, or question from your <strong>{student.course}</strong> course.
-        </p>
-
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <textarea
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={`e.g. "Explain binary search trees" or "How does TCP handshake work?"`}
-            rows={3}
-            disabled={isLoading}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm resize-none"
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !query.trim()}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm"
-          >
-            {isLoading ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                {loadingStep || 'Generating learning content…'}
-              </span>
-            ) : (
-              'Generate Learning Content'
-            )}
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Main App
-// ────────────────────────────────────────────────────────────────────────────
 function App() {
   const [sessionId] = useState(
     () => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   );
   const [uiComponentTree, setUIComponentTree] = useState<UIComponentTree | null>(null);
+  const [streamedModules, setStreamedModules] = useState<import('@/types').TeachingModule[]>([]);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
 
@@ -246,17 +39,29 @@ function App() {
     setStudent,
     labView,
     setLabView,
+    rehydrate,
   } = useAppStore();
 
   const currentModule = useAppStore(selectCurrentModule);
 
-  // WebSocket
+  // ── WebSocket ────────────────────────────────────────────────────────────
   const { sendFullPipeline, sendEngagementSignal } = useWebSocket({
     sessionId,
     autoConnect: true,
-    onKnowledgePayload: () => {
-      // knowledge stored in appStore by the hook; wait for UI update
+    onModuleStream: (mod, index, isFirst) => {
+      setStreamedModules(prev => {
+        const next = [...prev];
+        next[index] = mod;
+        return next;
+      });
+      if (isFirst) {
+        setCurrentModuleIndex(0);
+        setIsLoadingContent(false);
+        setLoadingStep('');
+        setLabView('learning');
+      }
     },
+    onKnowledgePayload: () => { /* stored in store by hook */ },
     onUIUpdate: (componentTree) => {
       setUIComponentTree(componentTree);
       setCurrentModuleIndex(0);
@@ -264,8 +69,16 @@ function App() {
       setLoadingStep('');
       setLabView('learning');
     },
-    onSessionComplete: () => {
-      setLabView('complete');
+    onSessionComplete: () => setLabView('complete'),
+    onPipelineStatus: (step, status) => {
+      if (status === 'processing') {
+        const labels: Record<string, string> = {
+          biometric_analysis: 'Analysing cognitive state…',
+          knowledge_query:    'Generating content…',
+          ui_orchestration:   'Building your interface…',
+        };
+        setLoadingStep(labels[step] ?? 'Processing…');
+      }
     },
     onError: (err) => {
       setError(err.message);
@@ -274,7 +87,12 @@ function App() {
     },
   });
 
-  // Initialise session on mount
+  // ── Mount effects ────────────────────────────────────────────────────────
+  useEffect(() => {
+    rehydrate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     setSession({
       id: sessionId,
@@ -285,9 +103,8 @@ function App() {
     });
   }, [sessionId, setSession]);
 
-  // ── handlers ──
-
-  const handleRegister = useCallback(
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const handleEnter = useCallback(
     (reg: StudentRegistration) => {
       setStudent(reg);
       setLabView('topic');
@@ -298,20 +115,24 @@ function App() {
   const handleTopicSubmit = useCallback(
     (query: string) => {
       setError(null);
+      setStreamedModules([]);
+      setUIComponentTree(null);
       setIsLoadingContent(true);
-      // sendFullPipeline auto-reconnects if the socket is closed
       void sendFullPipeline(query, [], 0);
 
-      // Allow up to 120 s — local LLMs can take 30-90 s on first token
+      // 120 s timeout — local LLMs can take 30–90 s on first token
       const t = setTimeout(() => {
         setIsLoadingContent(false);
-        if (!uiComponentTree) {
-          setError('Request timed out (120 s). Make sure the backend and Ollama are both running.');
-        }
+        setStreamedModules(prev => {
+          if (prev.length === 0) {
+            setError('Request timed out (120 s). Make sure the backend and Ollama are running.');
+          }
+          return prev;
+        });
       }, 120_000);
       return () => clearTimeout(t);
     },
-    [sendFullPipeline, setError, uiComponentTree]
+    [sendFullPipeline, setError]
   );
 
   const handleModuleComplete = useCallback(() => {
@@ -328,6 +149,7 @@ function App() {
 
   const handleNewTopic = useCallback(() => {
     setUIComponentTree(null);
+    setStreamedModules([]);
     setIsLoadingContent(false);
     setError(null);
     setLabView('topic');
@@ -336,16 +158,17 @@ function App() {
   const handleLogout = useCallback(() => {
     setStudent(null);
     setUIComponentTree(null);
+    setStreamedModules([]);
     setIsLoadingContent(false);
     setError(null);
     setLabView('register');
   }, [setStudent, setLabView, setError]);
 
-  // ── render ──
-
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+
         {/* Header */}
         <header className="bg-white shadow-sm sticky top-0 z-10">
           <div className="max-w-5xl mx-auto px-4 py-4 sm:px-6 flex items-center justify-between">
@@ -363,10 +186,9 @@ function App() {
                 <button
                   onClick={handleLogout}
                   className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors"
-                  title="Log out"
+                  title="Sign out"
                 >
-                  <LogOut className="w-4 h-4" />
-                  Sign out
+                  <LogOut className="w-4 h-4" /> Sign out
                 </button>
               )}
               {wsConnected ? (
@@ -384,6 +206,7 @@ function App() {
 
         {/* Main */}
         <main className="max-w-5xl mx-auto px-4 py-10 sm:px-6">
+
           {/* Global error banner */}
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
@@ -393,9 +216,9 @@ function App() {
             </div>
           )}
 
-          {/* ── VIEW: Register ── */}
+          {/* ── VIEW: Register / Login ── */}
           {labView === 'register' && (
-            <RegistrationPanel onRegister={handleRegister} />
+            <RegistrationPanel onEnter={handleEnter} />
           )}
 
           {/* ── VIEW: Topic ── */}
@@ -410,52 +233,116 @@ function App() {
           )}
 
           {/* ── VIEW: Learning ── */}
-          {labView === 'learning' && knowledgePayload && uiComponentTree && (
-            <div>
-              {/* Session info bar */}
-              <div className="bg-white rounded-xl shadow-sm p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs text-gray-500">Learning session for</p>
-                  <p className="font-semibold text-gray-900 text-sm">
-                    {student?.fullName} &middot; {knowledgePayload.core_concept}
-                  </p>
-                </div>
-                <button
-                  onClick={handleNewTopic}
-                  className="text-xs text-blue-600 hover:underline"
-                >
-                  ← New topic
-                </button>
-              </div>
+          {labView === 'learning' && streamedModules.length > 0 && (() => {
+            // Use streamed modules immediately; fall back to knowledgePayload once full
+            const modules = knowledgePayload?.teaching_modules ?? streamedModules;
+            const activeModule = modules[currentModuleIndex] ?? streamedModules[currentModuleIndex];
+            const coreConcept = knowledgePayload?.core_concept
+              ?? (streamedModules[0]?.title ?? 'Loading…');
+            const isStillStreaming = !knowledgePayload && streamedModules.length > 0;
 
-              {/* Progress bar */}
-              <div className="bg-white rounded-xl shadow-sm p-4 mb-6">
-                <div className="flex justify-between text-xs text-gray-500 mb-1.5">
-                  <span className="font-medium text-gray-700">Progress</span>
-                  <span>{currentModuleIndex + 1} / {knowledgePayload.teaching_modules.length} modules</span>
+            return (
+              <div>
+                {/* Session info bar */}
+                <div className="bg-white rounded-xl shadow-sm p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-gray-500">Learning session for</p>
+                    <p className="font-semibold text-gray-900 text-sm">
+                      {student?.fullName} &middot; {coreConcept}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {isStillStreaming && (
+                      <span className="flex items-center gap-1.5 text-xs text-blue-600 animate-pulse">
+                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-ping" />
+                        Generating more…
+                      </span>
+                    )}
+                    <button onClick={handleNewTopic} className="text-xs text-blue-600 hover:underline">
+                      ← New topic
+                    </button>
+                  </div>
                 </div>
-                <div className="w-full bg-gray-100 rounded-full h-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${((currentModuleIndex + 1) / knowledgePayload.teaching_modules.length) * 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
 
-              {/* Dynamic content */}
-              <div className="bg-white rounded-2xl shadow-lg p-6">
-                <DynamicUIRenderer
-                  componentTree={uiComponentTree}
-                  currentModule={currentModule || undefined}
-                  cognitiveLoad={undefined}
-                  onModuleComplete={handleModuleComplete}
-                  onNeedHelp={handleNeedHelp}
-                />
+                {/* Progress bar */}
+                <div className="bg-white rounded-xl shadow-sm p-4 mb-6">
+                  <div className="flex justify-between text-xs text-gray-500 mb-1.5">
+                    <span className="font-medium text-gray-700">Progress</span>
+                    <span>
+                      {currentModuleIndex + 1} / {modules.length} modules
+                      {isStillStreaming && ' (more loading…)'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${((currentModuleIndex + 1) / Math.max(modules.length, 1)) * 100}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Module cards — render streamed modules directly when uiComponentTree isn't ready */}
+                {uiComponentTree ? (
+                  <div className="bg-white rounded-2xl shadow-lg p-6">
+                    <DynamicUIRenderer
+                      componentTree={uiComponentTree}
+                      currentModule={activeModule || undefined}
+                      cognitiveLoad={undefined}
+                      onModuleComplete={handleModuleComplete}
+                      onNeedHelp={handleNeedHelp}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {streamedModules.map((mod, i) => (
+                      <div
+                        key={mod.module_id}
+                        className={`bg-white rounded-2xl shadow-lg p-6 border-2 transition-all ${
+                          i === currentModuleIndex ? 'border-blue-400' : 'border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                            mod.type === 'explanation' ? 'bg-blue-100 text-blue-700' :
+                            mod.type === 'code_example' ? 'bg-purple-100 text-purple-700' :
+                            'bg-green-100 text-green-700'
+                          }`}>
+                            {mod.type.replace('_', ' ')}
+                          </span>
+                          <span className="text-xs text-gray-400">{mod.estimated_time}s</span>
+                        </div>
+                        <h3 className="text-lg font-semibold text-gray-900 mb-3">{mod.title}</h3>
+                        <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{mod.content}</p>
+                      </div>
+                    ))}
+
+                    {isStillStreaming && (
+                      <div className="bg-white rounded-2xl shadow-sm p-6 border-2 border-dashed border-blue-200 text-center text-blue-400 text-sm animate-pulse">
+                        Generating next module…
+                      </div>
+                    )}
+
+                    {/* Module navigation */}
+                    <div className="bg-white rounded-xl shadow-sm p-4 flex gap-3">
+                      <button
+                        onClick={handleModuleComplete}
+                        disabled={currentModuleIndex >= modules.length - 1}
+                        className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 transition-colors text-sm"
+                      >
+                        {currentModuleIndex >= modules.length - 1 ? '✓ Done' : 'Next module →'}
+                      </button>
+                      <button
+                        onClick={handleNeedHelp}
+                        className="px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors text-sm"
+                      >
+                        Need Help
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ── VIEW: Complete ── */}
           {labView === 'complete' && (
@@ -463,8 +350,8 @@ function App() {
               <CheckCircle className="w-14 h-14 text-green-500 mx-auto mb-4" />
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Session Complete!</h2>
               <p className="text-gray-500 text-sm mb-6">
-                Great work, <strong>{student?.fullName}</strong>. You've finished the learning session
-                on <strong>{knowledgePayload?.core_concept}</strong>.
+                Great work, <strong>{student?.fullName}</strong>. You've finished the learning
+                session on <strong>{knowledgePayload?.core_concept}</strong>.
               </p>
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
@@ -510,5 +397,3 @@ function App() {
 }
 
 export default App;
-
-// Made with Bob for IBM AI Builders Challenge

@@ -118,7 +118,7 @@ docker-compose up -d
 **Terminal 1 - Backend:**
 ```bash
 cd backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python run.py
 ```
 
 **Terminal 2 - Frontend:**

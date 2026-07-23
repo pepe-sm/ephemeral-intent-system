@@ -369,10 +369,29 @@ class LifecycleManager:
             self._is_monitoring = False
     
     def start_monitoring(self):
-        """Start background engagement monitoring"""
-        if not self._monitoring_task or self._monitoring_task.done():
-            self._monitoring_task = asyncio.create_task(self.monitor_engagement())
-            logger.info("Engagement monitoring task started")
+        """Start background engagement monitoring.
+
+        Safe to call from either an async context or a background thread.
+        When called from a thread, schedules the coroutine on the running
+        event loop via run_coroutine_threadsafe.
+        """
+        if self._monitoring_task and not self._monitoring_task.done():
+            return  # already running
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Inside an async context — create a task directly.
+            self._monitoring_task = loop.create_task(self.monitor_engagement())
+        except RuntimeError:
+            # No running loop in this thread — schedule on the main loop.
+            try:
+                loop = asyncio.get_event_loop()
+                asyncio.run_coroutine_threadsafe(self.monitor_engagement(), loop)
+            except Exception as exc:
+                logger.warning(f"LifecycleManager: could not start monitoring task: {exc}")
+                return
+
+        logger.info("Engagement monitoring task started")
     
     def stop_monitoring(self):
         """Stop background engagement monitoring"""
