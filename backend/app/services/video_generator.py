@@ -54,6 +54,20 @@ def _required_path(key: str) -> Optional[Path]:
     return p
 
 
+def _find_ffmpeg() -> Optional[str]:
+    """
+    Locate ffmpeg. Checks FFMPEG_BINARY env var first (absolute path),
+    then falls back to PATH search.  Returns the executable path or None.
+    """
+    explicit = _env("FFMPEG_BINARY")
+    if explicit:
+        if Path(explicit).exists():
+            return explicit
+        logger.warning(f"[VideoGenerator] FFMPEG_BINARY={explicit!r} not found")
+    found = shutil.which("ffmpeg")
+    return found
+
+
 # ---------------------------------------------------------------------------
 # VideoGenerationResult
 # ---------------------------------------------------------------------------
@@ -365,6 +379,13 @@ class VideoGenerator:
             "--nosmooth",         # faster; disable if output is jittery
         ]
 
+        # Ensure ffmpeg is findable inside the subprocess even if not on PATH
+        env = os.environ.copy()
+        ffmpeg_path = _find_ffmpeg()
+        if ffmpeg_path:
+            ffmpeg_dir = str(Path(ffmpeg_path).parent)
+            env["PATH"] = ffmpeg_dir + os.pathsep + env.get("PATH", "")
+
         subprocess.run(
             cmd,
             cwd=str(self.wav2lip_dir),
@@ -372,6 +393,7 @@ class VideoGenerator:
             text=True,
             check=True,
             timeout=300,
+            env=env,
         )
 
         if not output_mp4.exists():
@@ -413,9 +435,9 @@ class VideoGenerator:
         if not self.avatar_image:
             missing.append("AVATAR_IMAGE")
 
-        # ffmpeg must be on PATH
-        if not shutil.which("ffmpeg"):
-            missing.append("ffmpeg (not found on PATH)")
+        # ffmpeg — check explicit path first, then PATH
+        if not _find_ffmpeg():
+            missing.append("ffmpeg (set FFMPEG_BINARY or add to PATH)")
 
         if missing:
             logger.debug(
