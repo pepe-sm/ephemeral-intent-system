@@ -21,9 +21,10 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-# Load .env before uvicorn touches any config
+# Load .env before uvicorn touches any config.
+# override=True ensures .env always wins over stale shell environment variables.
 from dotenv import load_dotenv
-load_dotenv(BACKEND_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env", override=True)
 
 import uvicorn
 

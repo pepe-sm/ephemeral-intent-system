@@ -3,9 +3,11 @@ FastAPI Main Application Entry Point
 Ephemeral Intent Synthesis System
 """
 
-# Load .env before anything else so every os.getenv() call sees the values
+# Load .env before anything else so every os.getenv() call sees the values.
+# override=True ensures .env always wins even if variables were already set
+# in the shell environment from a previous (broken) run.
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from fastapi import FastAPI, HTTPException, WebSocket, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
