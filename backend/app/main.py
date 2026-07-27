@@ -430,6 +430,35 @@ async def get_session_video_registry(session_id: str) -> Dict[str, Any]:
 # Video file serving
 # ---------------------------------------------------------------------------
 
+@app.get("/api/v1/video/", tags=["Video"])
+async def list_videos() -> Dict[str, Any]:
+    """
+    Return all cached MP4 files in the video output directory.
+    Lets the frontend browse locally-generated videos without a session.
+    """
+    from pathlib import Path
+    video_dir = Path(os.getenv("VIDEO_OUTPUT_DIR", "./data/videos"))
+    if not video_dir.exists():
+        return {"videos": [], "count": 0}
+    files = sorted(
+        video_dir.glob("*.mp4"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return {
+        "videos": [
+            {
+                "filename": f.name,
+                "url": f"/api/v1/video/{f.name}",
+                "size_bytes": f.stat().st_size,
+                "created_at": datetime.utcfromtimestamp(f.stat().st_mtime).isoformat(),
+            }
+            for f in files
+        ],
+        "count": len(files),
+    }
+
+
 @app.get("/api/v1/video/{filename}", tags=["Video"])
 async def serve_video(filename: str) -> FileResponse:
     """Serve a generated MP4 file from the video output directory."""

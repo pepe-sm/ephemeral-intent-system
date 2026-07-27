@@ -10,13 +10,14 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RegistrationPanel } from '@/components/RegistrationPanel';
 import { TopicPanel } from '@/components/TopicPanel';
 import { ResourcesPanel } from '@/components/ResourcesPanel';
+import { VideoLibrary } from '@/components/VideoLibrary';
 import { VideoPlayer } from '@/components/VideoPlayer';
 import { DynamicUIRenderer } from '@/components/DynamicUI/DynamicUIRenderer';
 import { useAppStore, selectCurrentModule } from '@/store/appStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { config } from '@/config';
 import type { UIComponentTree, StudentRegistration } from '@/types';
-import { Brain, Wifi, WifiOff, AlertCircle, CheckCircle, LogOut, BookMarked } from 'lucide-react';
+import { Brain, Wifi, WifiOff, AlertCircle, CheckCircle, LogOut, BookMarked, Film } from 'lucide-react';
 
 function App() {
   const [sessionId] = useState(
@@ -270,6 +271,18 @@ function App() {
                   <BookMarked className="w-4 h-4" /> Resources
                 </button>
               )}
+              {/* Video library — always accessible so cached videos can be viewed */}
+              <button
+                onClick={() => setLabView(labView === 'videos' ? (student ? 'topic' : 'register') : 'videos')}
+                className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
+                  labView === 'videos'
+                    ? 'text-indigo-600'
+                    : 'text-gray-500 hover:text-indigo-600'
+                }`}
+                title="Browse generated videos"
+              >
+                <Film className="w-4 h-4" /> Videos
+              </button>
               {student && labView !== 'register' && (
                 <button
                   onClick={handleLogout}
@@ -312,6 +325,11 @@ function App() {
           {/* ── VIEW: Resources ── */}
           {labView === 'resources' && (
             <ResourcesPanel onBack={() => setLabView(student ? 'topic' : 'register')} />
+          )}
+
+          {/* ── VIEW: Videos ── */}
+          {labView === 'videos' && (
+            <VideoLibrary onBack={() => setLabView(student ? 'topic' : 'register')} />
           )}
 
           {/* ── VIEW: Topic ── */}

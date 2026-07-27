@@ -15,7 +15,7 @@ export interface StudentRegistration {
   registeredAt: string;
 }
 
-export type LabView = 'register' | 'topic' | 'resources' | 'learning' | 'complete';
+export type LabView = 'register' | 'topic' | 'resources' | 'learning' | 'complete' | 'videos';
 
 // ============================================================================
 // Biometric Types
