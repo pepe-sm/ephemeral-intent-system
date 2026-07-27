@@ -199,7 +199,14 @@ async def _run_video_pipeline(
     logger.info(f"[VideoJob] Starting sequential video generation for {len(modules)} modules [{session_id}]")
     for module in modules:
         module_id = module.module_id
-        script = f"{module.title}. {module.content}"
+        # Cap script to first 2 sentences from the content body (~20-30 words).
+        # Full paragraphs = 200+ words → 60-70s audio → 5-7 min Wav2Lip on CPU.
+        # First 2 sentences of content keeps audio ~10s → ~50s Wav2Lip on CPU.
+        import re as _re
+        content_sentences = _re.split(r'(?<=[.!?])\s+', module.content.strip())
+        body = " ".join(content_sentences[:2]).strip()
+        script = f"{module.title}. {body}" if body else module.title
+        logger.info(f"[VideoJob] Script for {module_id}: {len(script.split())} words — '{script[:80]}…'")
         try:
             result = await vg.generate_async(
                 script=script,
