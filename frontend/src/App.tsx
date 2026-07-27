@@ -30,8 +30,9 @@ function App() {
   const [moduleVideos,   setModuleVideos]   = useState<Record<string, string>>({});
   // moduleIds currently awaiting video generation (spinner shown until video_ready)
   const [videoPending,   setVideoPending]   = useState<Set<string>>(new Set());
-  // whether the backend VideoGenerator is ready (checked once on mount)
-  const videoEnabledRef = useRef<boolean>(false);
+  // whether the backend VideoGenerator is ready (state, not ref — triggers re-renders)
+  const [videoEnabled,   setVideoEnabled]   = useState<boolean>(false);
+  const videoEnabledRef = useRef<boolean>(false); // kept for synchronous gating in callbacks
 
   const {
     session,
@@ -62,10 +63,8 @@ function App() {
         next[index] = mod;
         return next;
       });
-      // Mark this module as pending a video only if the backend pipeline is ready
-      if (videoEnabledRef.current) {
-        setVideoPending(prev => new Set([...prev, mod.module_id]));
-      }
+      // Always mark as pending — VideoPlayer section hides if !videoEnabled
+      setVideoPending(prev => new Set([...prev, mod.module_id]));
       if (isFirst) {
         setCurrentModuleIndex(0);
         setIsLoadingContent(false);
@@ -111,11 +110,14 @@ function App() {
   useEffect(() => {
     rehydrate();
     // Check whether the backend video pipeline is ready so we know whether to
-    // show "Generating video…" spinners.
+    // show "Generating video…" spinners. Set BOTH the ref (sync access in
+    // callbacks) and state (triggers re-renders so poll effect fires).
     fetch(`${config.backend_url}/health`)
       .then(r => r.json())
       .then(data => {
-        videoEnabledRef.current = data?.components?.video_generator === 'ready';
+        const ready = data?.components?.video_generator === 'ready';
+        videoEnabledRef.current = ready;
+        setVideoEnabled(ready);
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -126,7 +128,7 @@ function App() {
   // (up to 15 min) to pick up videos even if the WS was closed before they
   // were ready.
   useEffect(() => {
-    if (!videoEnabledRef.current) return;
+    if (!videoEnabled) return;           // videoEnabled is state — this re-runs when it becomes true
     if (streamedModules.length === 0) return;
 
     const INTERVAL_MS  = 15_000;
@@ -159,7 +161,7 @@ function App() {
     const t = setTimeout(poll, 5_000);
     return () => { stopped = true; clearTimeout(t); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamedModules.length, sessionId]);
+  }, [videoEnabled, streamedModules.length, sessionId]);
 
   useEffect(() => {
     setSession({
@@ -404,17 +406,19 @@ function App() {
                         </div>
                         <h3 className="text-lg font-semibold text-gray-900 mb-3">{mod.title}</h3>
                         <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{mod.content}</p>
-                        {/* Video player — shown once backend sends video_ready */}
-                        {moduleVideos[mod.module_id] ? (
-                          <VideoPlayer
-                            videoUrl={moduleVideos[mod.module_id]}
-                            moduleTitle={mod.title}
-                          />
-                        ) : videoPending.has(mod.module_id) && (
-                          <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
-                            <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
-                            Generating video…
-                          </div>
+                        {/* Video section — only rendered when video pipeline is ready */}
+                        {videoEnabled && (
+                          moduleVideos[mod.module_id] ? (
+                            <VideoPlayer
+                              videoUrl={moduleVideos[mod.module_id]}
+                              moduleTitle={mod.title}
+                            />
+                          ) : videoPending.has(mod.module_id) ? (
+                            <div className="mt-4 flex items-center gap-2 text-xs text-gray-400 border border-gray-100 rounded-lg px-3 py-2 bg-gray-50">
+                              <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
+                              <span>Generating video — ready in ~40 s</span>
+                            </div>
+                          ) : null
                         )}
                       </div>
                     ))}
