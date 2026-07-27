@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -152,3 +152,11 @@ credentials.json
 service-account.json
 
 # Made with Bob
+
+# ChromaDB vector store - runtime data, machine-specific
+backend/chroma_db/
+chroma_db/
+
+# Generated video files - large binaries, machine-specific
+backend/data/videos/*.mp4
+data/videos/*.mp4
