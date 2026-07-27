@@ -1,21 +1,27 @@
-# Frontend Dockerfile
-# Multi-stage build for optimized production image
+# Frontend Dockerfile — Ephemeral Intent Synthesis System
+# Multi-stage build: node builder → nginx runtime
 
 # Stage 1: Build
 FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
+# Accept VITE_ build-time env vars from docker-compose args
+ARG VITE_BACKEND_HOST=localhost
+ARG VITE_BACKEND_PORT=8000
+ARG VITE_BACKEND_PROTOCOL=http
+ARG VITE_WS_PROTOCOL=ws
+ENV VITE_BACKEND_HOST=$VITE_BACKEND_HOST \
+    VITE_BACKEND_PORT=$VITE_BACKEND_PORT \
+    VITE_BACKEND_PROTOCOL=$VITE_BACKEND_PROTOCOL \
+    VITE_WS_PROTOCOL=$VITE_WS_PROTOCOL
+
+# Install dependencies first (better layer caching)
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
+# Copy source code and build
 COPY . .
-
-# Build the application
 RUN npm run build
 
 # Stage 2: Production

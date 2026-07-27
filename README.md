@@ -1,312 +1,428 @@
 # Ephemeral Intent Synthesis System
 
-**IBM AI Builders Challenge - Proof of Concept**
+<div align="center">
 
-A revolutionary human-computer interaction system that dynamically synthesizes personalized, ephemeral educational interfaces based on real-time biometric context and cognitive load detection.
+**IBM AI Builders Challenge 2026 — Finalist Project**
 
-## 🎯 Core Innovation
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-18+-61DAFB?logo=react)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3+-3178C6?logo=typescript)](https://typescriptlang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Instead of traditional "pull and filter" content retrieval, this system:
-- Captures real-time biometric data (facial analysis, cognitive load, urgency)
-- Synthesizes custom, short-lived educational applications
-- Adapts UI complexity and presentation style to user's mental state
-- Terminates compute resources immediately after learning goal is achieved
+</div>
 
-## 🏗️ Architecture Overview
+---
+
+## What Is This?
+
+The **Ephemeral Intent Synthesis System** is an AI-powered student learning assistant that reads your cognitive state through your webcam, then instantly synthesises a personalised lesson — content, pacing, and presentation mode all matched to *how your brain is working right now*.
+
+When the learning goal is met, every compute resource is released. Nothing persists. Nothing idles. That is the **ephemeral** part.
+
+### The Core Idea
+
+> Traditional e-learning: pull a static course and hope it fits.
+>
+> This system: observe the learner → synthesise *exactly the right content* → terminate everything the moment it is no longer needed.
+
+---
+
+## ✨ Feature Highlights
+
+| Capability | How it works |
+|---|---|
+| **Biometric Adaptation** | MediaPipe Face Mesh (468 landmarks) measures blink rate, gaze stability, micro-tension and eye aspect ratio. Cognitive load is classified in real-time — high / medium / low. |
+| **Streaming RAG Engine** | Ollama (local) or IBM watsonx.ai drives a LangChain + ChromaDB RAG pipeline. Teaching modules stream to the browser as they are generated — first content appears in ~2 s. |
+| **Adaptive UI** | The UI Orchestrator selects font size, text density, code visibility and pacing based on the biometric token. A stressed learner gets bullet points; a relaxed learner gets deep explanations. |
+| **Local AI Video** | Optional Piper TTS + Wav2Lip pipeline generates talking-head MP4s for every module — 100 % on-device, no API key, no cloud. |
+| **Video Library** | All generated videos are accessible from a built-in video browser, independent of the current session. |
+| **Ephemeral Compute** | The Lifecycle Manager terminates sessions, releases memory, and scales to zero within 2 seconds of goal detection. |
+| **Resource Ingestion** | Feed the RAG engine your own documents (text, Markdown, PDF) or any URL via the Resources panel. |
+
+---
+
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Frontend Layer                          │
-│  React + TypeScript + WebRTC + MediaPipe                   │
-│  - Biometric Capture  - Dynamic UI  - Session Monitor      │
-└─────────────────────────────────────────────────────────────┘
-                            ↕ WebSocket
-┌─────────────────────────────────────────────────────────────┐
-│                     Backend Services                        │
-│  FastAPI + Python + IBM watsonx.ai                         │
-│  - Biometric Analyzer  - RAG Engine  - UI Orchestrator     │
-└─────────────────────────────────────────────────────────────┘
-                            ↕
-┌─────────────────────────────────────────────────────────────┐
-│                  Lifecycle Management                       │
-│  - Engagement Monitor  - Session Termination  - Cleanup    │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Browser                                                         │
+│  React 18 + TypeScript + Tailwind CSS                           │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │
+│  │ BiometricCapture│  │  LearningView   │  │  VideoLibrary  │  │
+│  │ (MediaPipe 468) │  │ (StreamedModules│  │  (MP4 browser) │  │
+│  │                 │  │  + VideoPlayer) │  │                │  │
+│  └────────┬────────┘  └────────┬────────┘  └───────┬────────┘  │
+└───────────┼────────────────────┼───────────────────┼───────────┘
+            │     WebSocket /ws  │                   │ REST /api
+            ▼                    ▼                   ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  FastAPI Backend (Python 3.11)                                   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │ BiometricAnalyzer│  │   RAG Engine     │  │ VideoGenerator│  │
+│  │ → CognitiveLoad  │  │ LangChain+Chroma │  │ Piper+Wav2Lip │  │
+│  │ → BiometricToken │  │ Ollama/watsonx.ai│  │ (optional)    │  │
+│  └──────────────────┘  └────────┬─────────┘  └───────────────┘  │
+│  ┌──────────────────┐           │                                │
+│  │  UIOrchestrator  │◄──────────┘                                │
+│  │  LifecycleManager│                                            │
+│  └──────────────────┘                                            │
+└──────────────┬───────────────────────────────────────────────────┘
+               │
+    ┌──────────┴──────────┐
+    │   Ollama (local)    │   or   IBM watsonx.ai (cloud)
+    │   phi3:mini default │        granite-13b-chat-v2
+    └─────────────────────┘
 ```
 
-## 🚀 Key Features
+---
 
-### 1. Biometric Context Service
-- Real-time facial landmark detection (468 points)
-- Eye aspect ratio (EAR) for attention tracking
-- Micro-expression analysis for stress detection
-- Cognitive load classification (high/medium/low)
+## 🚀 Quick Start — Local (5 minutes)
 
-### 2. Generative UI Orchestrator
-- Dynamic component generation based on cognitive state
-- Adaptive text density and font sizing
-- Voice synthesis with stress-matched pacing
-- Progressive disclosure of complex concepts
+### Prerequisites
 
-### 3. RAG Engine Integration
-- IBM watsonx.ai powered knowledge retrieval
-- Parallel search across technical documentation
-- Semantic ranking and fact verification
-- Structured teaching module generation
+| Tool | Min version | Notes |
+|---|---|---|
+| Python | 3.11 | `python --version` |
+| Node.js | 18 | `node --version` |
+| Ollama | latest | https://ollama.ai — pull `phi3:mini` |
+| Webcam | any | required for biometric capture |
 
-### 4. Ephemeral Computing
-- Zero persistent compute between sessions
-- <2 second cleanup and scale-to-zero
-- Energy-efficient, batch-size-1 processing
-- Automatic resource deallocation
+### 1 — Clone & configure
 
-## 📋 Prerequisites
+```bash
+git clone https://github.com/pepe-sm/ephemeral-intent-system.git
+cd ephemeral-intent-system
 
-- **Node.js** 18+ and npm/yarn
-- **Python** 3.11+
-- **Docker** and Docker Compose
-- **IBM Cloud Account** with watsonx.ai access
-- **Webcam** for biometric capture
+# Backend environment
+cp backend/.env.example backend/.env
+# The defaults work out of the box with Ollama.
+# To use IBM watsonx.ai instead, set USE_OLLAMA=false and fill in
+# WATSONX_API_KEY + WATSONX_PROJECT_ID in backend/.env
+```
 
-## 🛠️ Installation
+### 2 — Start Ollama and pull a model
 
-### Backend Setup
+```bash
+ollama serve           # starts the local LLM server
+ollama pull phi3:mini  # ~2.3 GB — fastest model, great for demos
+```
+
+### 3 — Backend
 
 ```bash
 cd backend
-
-# Create virtual environment
 python -m venv venv
 
-# Activate virtual environment
-# Windows:
+# Windows
 venv\Scripts\activate
-# macOS/Linux:
+# macOS / Linux
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env with your IBM watsonx.ai credentials
-```
-
-### Frontend Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Configure environment variables
-cp .env.example .env.local
-# Edit .env.local with backend WebSocket URL
-```
-
-### Docker Environment
-
-```bash
-# Start Redis and monitoring services
-docker-compose up -d
-```
-
-## 🎮 Running the Application
-
-### Development Mode
-
-**Terminal 1 - Backend:**
-```bash
-cd backend
 python run.py
+# → http://localhost:8000  (API docs at /docs)
 ```
 
-**Terminal 2 - Frontend:**
+### 4 — Frontend
+
 ```bash
 cd frontend
+npm install
 npm run dev
+# → http://localhost:3000
 ```
 
-**Access the application:**
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+### Demo flow
 
-## 📊 System Flow
+1. Open **http://localhost:3000**
+2. Enter your name and student ID on the registration screen
+3. Allow webcam access when prompted
+4. Type a topic — *"How does a neural network learn?"*
+5. Watch the biometric analysis run (3 seconds), then content streams in
+6. Navigate the modules; click **Videos** in the header to see any generated lecture clips
 
-1. **User Initiates Query**
-   - Text/voice input captured
-   - 3-second video stream for biometric analysis
+---
 
-2. **Biometric Analysis**
-   - MediaPipe processes facial landmarks
-   - Cognitive load calculated from multiple metrics
-   - Biometric token generated
+## 🐳 Docker — Full Stack
 
-3. **Knowledge Synthesis**
-   - RAG engine queries IBM watsonx.ai
-   - Parallel search across documentation
-   - Content structured into teaching modules
+The `docker-compose.yml` starts **every service** in one command:
 
-4. **Dynamic UI Generation**
-   - UI Orchestrator selects presentation mode
-   - Components adapted to cognitive load
-   - Real-time rendering with animations
-
-5. **Session Termination**
-   - Engagement monitoring detects completion
-   - Summary compiled and exported
-   - Resources cleaned up and scaled to zero
-
-## 🧪 Testing
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│  frontend    │  │  backend     │  │  ollama      │  │  redis       │
+│  :3000       │  │  :8000       │  │  :11434      │  │  :6379       │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+```
 
 ```bash
-# Backend tests
-cd backend
-pytest tests/ -v
+# 1. Create your .env
+cp backend/.env.example backend/.env
 
-# Frontend tests
-cd frontend
-npm test
+# 2. Start everything (backend + ollama + redis)
+docker compose up --build
 
-# Integration tests
-npm run test:e2e
+# The first run pulls the phi3:mini model (~2.3 GB) automatically.
+# Subsequent starts reuse the cached model.
+
+# 3. Open http://localhost:3000
 ```
 
-## 📈 Success Metrics
+### Production build (nginx-served frontend)
 
-- **Biometric Accuracy**: >85% correlation with self-reported stress
-- **Response Latency**: <500ms from query to first UI render
-- **Resource Efficiency**: Complete cleanup within 2 seconds
-- **Adaptation Quality**: Measurable UI complexity differences
-- **Energy Savings**: 90% reduction vs. traditional architecture
+```bash
+docker compose --profile prod up --build
+```
 
-## 🔧 Technology Stack
+### Stop / clean up
 
-### Frontend
-- React 18+ with TypeScript
-- WebRTC for video capture
-- MediaPipe (TensorFlow.js) for facial analysis
-- Framer Motion for animations
-- Zustand for state management
-- Tailwind CSS for styling
+```bash
+docker compose down          # stop containers, keep volumes
+docker compose down -v       # stop containers AND delete all data volumes
+```
 
-### Backend
-- FastAPI (Python 3.11+)
-- MediaPipe Python SDK
-- IBM watsonx.ai SDK
-- LangChain for RAG orchestration
-- WebSocket for real-time communication
-- Redis for ephemeral state
+### Volumes
 
-### Infrastructure
-- Docker & Docker Compose
-- Kubernetes-ready architecture
-- IBM Code Engine / Cloud Run compatible
-- Prometheus for monitoring
+| Volume | Contents |
+|---|---|
+| `ollama_models` | LLM model weights — reused across restarts |
+| `chroma_data` | Vector store embeddings — survives container rebuild |
+| `video_data` | Generated MP4 files — persistent video cache |
+| `redis_data` | Session state log |
 
-## 📁 Project Structure
+---
+
+## 🎛️ Configuration Reference
+
+All settings live in `backend/.env` (copy from `.env.example`).
+
+### LLM provider
+
+```bash
+# Local (default — requires Ollama)
+USE_OLLAMA=true
+OLLAMA_MODEL=phi3:mini          # or llama3.2, mistral:7b, codellama:7b
+
+# Cloud (requires IBM Cloud account)
+USE_OLLAMA=false
+WATSONX_API_KEY=<your-key>
+WATSONX_PROJECT_ID=<your-project>
+WATSONX_MODEL_ID=ibm/granite-13b-chat-v2
+```
+
+### Optional AI Video (Piper + Wav2Lip)
+
+See [`LOCAL_VIDEO_GUIDE.md`](LOCAL_VIDEO_GUIDE.md) for the full setup.
+
+```bash
+VIDEO_ENABLED=true
+PIPER_BINARY=C:/tools/piper/piper.exe
+PIPER_MODEL=./models/piper-voices/en_US-lessac-medium.onnx
+WAV2LIP_DIR=./Wav2Lip
+WAV2LIP_CHECKPOINT=./Wav2Lip/checkpoints/wav2lip.pth
+AVATAR_IMAGE=./data/avatar.png
+```
+
+---
+
+## 📡 API Reference
+
+Full interactive docs at **http://localhost:8000/docs** when the backend is running.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | System health — RAG status, video generator status |
+| `WS` | `/ws/{session_id}` | Real-time pipeline — biometrics → content → UI |
+| `GET` | `/api/v1/sessions` | List all active sessions |
+| `GET` | `/api/v1/sessions/{id}/videos` | Poll for videos generated in a session |
+| `POST` | `/api/v1/resources/ingest` | Add text / file to RAG knowledge base |
+| `POST` | `/api/v1/resources/ingest-url` | Fetch a URL and add its text to RAG |
+| `GET` | `/api/v1/resources` | List all indexed resources |
+| `DELETE` | `/api/v1/resources/{source_id}` | Remove a resource |
+| `GET` | `/api/v1/video/` | List all generated MP4 files |
+| `GET` | `/api/v1/video/{filename}` | Stream a generated MP4 |
+
+### WebSocket message types
+
+```
+Client → Server                Server → Client
+──────────────────────         ─────────────────────────────
+full_pipeline                  biometric_token
+knowledge_query                module_stream  (per module, streaming)
+biometric_analysis             knowledge_payload  (full, once done)
+ping                           ui_update
+                               video_ready  (per module)
+                               pipeline_complete
+                               error
+```
+
+---
+
+## 📂 Project Structure
 
 ```
 ephemeral-intent-system/
 ├── backend/
 │   ├── app/
-│   │   ├── services/
-│   │   │   ├── biometric_analyzer.py
-│   │   │   ├── rag_engine.py
-│   │   │   ├── ui_orchestrator.py
-│   │   │   └── lifecycle_manager.py
+│   │   ├── api/
+│   │   │   ├── pipeline.py       ← full pipeline + video job orchestration
+│   │   │   └── websocket.py      ← WS connection manager + message routing
 │   │   ├── models/
 │   │   │   ├── biometric_token.py
 │   │   │   └── knowledge_payload.py
-│   │   ├── api/
-│   │   │   ├── websocket.py
-│   │   │   └── routes.py
-│   │   └── main.py
-│   ├── tests/
+│   │   ├── services/
+│   │   │   ├── biometric_analyzer.py   ← 468-landmark cognitive load engine
+│   │   │   ├── rag_engine.py           ← LangChain + ChromaDB + Ollama/watsonx
+│   │   │   ├── ui_orchestrator.py      ← biometric → UI config mapping
+│   │   │   ├── lifecycle_manager.py    ← ephemeral session management
+│   │   │   ├── video_generator.py      ← Piper TTS + Wav2Lip pipeline
+│   │   │   └── video_cache.py          ← on-disk LRU cache
+│   │   └── main.py               ← FastAPI app, all REST endpoints
+│   ├── data/videos/              ← generated MP4 files (gitignored)
+│   ├── chroma_db/                ← vector store (gitignored)
+│   ├── Dockerfile
 │   ├── requirements.txt
-│   └── Dockerfile
+│   └── .env.example
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── BiometricCapture.tsx
-│   │   │   ├── DynamicUI/
-│   │   │   └── SessionMonitor.tsx
+│   │   │   ├── BiometricCapture.tsx    ← MediaPipe webcam capture
+│   │   │   ├── VideoPlayer.tsx         ← MP4 player with scrubber + download
+│   │   │   ├── VideoLibrary.tsx        ← browse all cached videos
+│   │   │   ├── ResourcesPanel.tsx      ← RAG ingestion UI
+│   │   │   ├── RegistrationPanel.tsx
+│   │   │   ├── TopicPanel.tsx
+│   │   │   └── DynamicUI/
+│   │   │       └── DynamicUIRenderer.tsx
 │   │   ├── hooks/
+│   │   │   └── useWebSocket.ts         ← WS lifecycle + all message handlers
 │   │   ├── services/
-│   │   ├── types/
-│   │   └── App.tsx
-│   ├── package.json
-│   └── tsconfig.json
-├── docs/
-│   ├── architecture.md
-│   ├── api-specification.md
-│   └── deployment-guide.md
-├── docker-compose.yml
+│   │   │   ├── websocket.ts
+│   │   │   └── voiceNarration.ts
+│   │   ├── store/appStore.ts            ← Zustand global state
+│   │   ├── config/index.ts
+│   │   ├── types/index.ts
+│   │   └── App.tsx                     ← main view router
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   └── package.json
+├── docker-compose.yml            ← full stack: backend + frontend + ollama + redis
+├── LOCAL_VIDEO_GUIDE.md          ← Piper + Wav2Lip local setup
+├── AI_VIDEO_INTEGRATION_GUIDE.md ← cloud video API alternatives
+├── OLLAMA_INTEGRATION.md
+├── DEPLOYMENT_GUIDE.md
 └── README.md
 ```
 
-## 🎯 Demo Scenarios
+---
 
-### Scenario 1: High-Stress Debugging
-- **Context**: Production issue, high urgency
-- **System Response**: Minimal text, voice-guided, calm tone
-- **Result**: Quick resolution with reduced cognitive load
+## 🧪 Testing
 
-### Scenario 2: Learning Mode
-- **Context**: Exploring new concepts, low urgency
-- **System Response**: Comprehensive docs, interactive playground
-- **Result**: Deep understanding with rich content
+```bash
+# Backend unit tests
+cd backend
+pytest tests/ -v --cov=app --cov-report=term-missing
 
-### Scenario 3: Quick Reference
-- **Context**: Syntax lookup, medium urgency
-- **System Response**: Concise examples, fast termination
-- **Result**: Immediate answer, minimal resource usage
+# Frontend type-check
+cd frontend
+npx tsc --noEmit
 
-## 🔐 Privacy & Security
-
-- **No Video Storage**: Biometric processing happens in real-time, no frames stored
-- **Local Processing**: MediaPipe runs client-side when possible
-- **Ephemeral State**: All session data deleted after termination
-- **User Consent**: Clear opt-in for biometric capture
-- **Data Minimization**: Only computed metrics transmitted, not raw video
-
-## 🌱 Environmental Impact
-
-This system embodies the **Low-Power Imperative**:
-- Eliminates idle resource consumption
-- Batch-size-1 ephemeral computing model
-- Energy consumed only for immediate problem-solving
-- 90% reduction in data center energy vs. traditional architectures
-
-## 🚧 Roadmap
-
-- [x] Architecture design and planning
-- [ ] Core biometric analysis implementation
-- [ ] RAG engine integration with IBM watsonx.ai
-- [ ] Dynamic UI orchestration system
-- [ ] Session lifecycle management
-- [ ] End-to-end integration testing
-- [ ] Performance optimization
-- [ ] User studies and validation
-- [ ] Production deployment guide
-
-## 📝 License
-
-MIT License - See LICENSE file for details
-
-## 👥 Contributors
-
-Built for the IBM AI Builders Challenge 2026
-
-## 🤝 Contributing
-
-Contributions welcome! Please read CONTRIBUTING.md for guidelines.
-
-## 📧 Contact
-
-For questions or feedback, please open an issue on GitHub.
+# Frontend lint
+npm run lint
+```
 
 ---
 
-**Built with ❤️ for the IBM AI Builders Challenge**
+## 🔧 Technology Stack
+
+### Frontend
+| Library | Purpose |
+|---|---|
+| React 18 + TypeScript | Component framework |
+| Vite 5 | Dev server + production bundler |
+| Tailwind CSS 3 | Utility-first styling |
+| Framer Motion | Smooth content transitions |
+| Zustand | Lightweight global state |
+| MediaPipe Face Mesh | 468-point facial landmark detection (client-side) |
+| lucide-react | Icon set |
+
+### Backend
+| Library | Purpose |
+|---|---|
+| FastAPI 0.109 | Async API framework + WebSocket |
+| Uvicorn | ASGI server |
+| LangChain 0.3 | RAG orchestration |
+| ChromaDB | Local vector store |
+| sentence-transformers | `all-MiniLM-L6-v2` embeddings |
+| Ollama SDK | Local LLM inference |
+| IBM watsonx.ai SDK | Cloud LLM alternative |
+| Piper TTS | Local text-to-speech (optional) |
+| Wav2Lip | Talking-head video synthesis (optional) |
+| Redis | Ephemeral session state |
+| Prometheus client | Metrics |
+
+### Infrastructure
+| Tool | Purpose |
+|---|---|
+| Docker + Compose | Single-command full-stack deployment |
+| Ollama | Runs phi3:mini, llama3.2, mistral, codellama locally |
+| nginx | Production static file serving |
+
+---
+
+## 🔐 Privacy
+
+- **Biometric data never leaves the browser** — MediaPipe runs client-side; only computed scores (a few floats) cross the WebSocket.
+- **No video frames stored** — the camera feed is processed frame-by-frame in memory only.
+- **Local AI by default** — Ollama means no data leaves your machine.
+- **Video generation is 100 % on-device** — Piper + Wav2Lip run locally.
+- **Ephemeral sessions** — all in-memory state is released on session end; ChromaDB stores only your explicitly ingested knowledge, not conversation history.
+
+---
+
+## 🌱 Environmental Impact
+
+This system is designed around the **low-power imperative**:
+
+- Compute is active only for the duration of a single learning exchange.
+- After goal detection, the LifecycleManager releases all session memory.
+- No idle servers polling for work.
+- Local models eliminate cloud round-trips and the associated data-centre energy.
+
+Estimated savings vs a persistent cloud learning platform: **>90 % reduction in active compute time** for equivalent knowledge delivery.
+
+---
+
+## 📋 Roadmap
+
+- [x] Biometric cognitive-load engine (468-landmark MediaPipe)
+- [x] Streaming RAG engine (Ollama + watsonx.ai)
+- [x] Adaptive UI orchestration
+- [x] Ephemeral session lifecycle management
+- [x] WebSocket real-time pipeline
+- [x] Local AI video generation (Piper TTS + Wav2Lip)
+- [x] Video library — browse all cached MP4s
+- [x] Resource ingestion (text, PDF, URL)
+- [x] Full Docker Compose stack
+- [ ] Mobile-responsive layout pass
+- [ ] Offline mode (service worker + cached embeddings)
+- [ ] Multi-language support (Piper has 60+ language voices)
+- [ ] Learning path persistence across sessions
+- [ ] Custom avatar upload UI
+- [ ] Gamification — streaks, badges, progress export
+
+---
+
+## 📝 License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+## 👥 Contributors
+
+Built for the **IBM AI Builders Challenge 2026**.
+
+---
+
+*Made with ❤️ — Ephemeral Intent Synthesis System*

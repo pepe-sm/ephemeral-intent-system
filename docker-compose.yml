@@ -1,66 +1,184 @@
-version: '3.8'
+# Ephemeral Intent Synthesis System — Full Stack
+# ──────────────────────────────────────────────
+# docker compose up          → dev mode (hot-reload backend, proxied frontend)
+# docker compose --profile prod up  → production mode (nginx-served frontend)
+#
+# Prerequisites:
+#   - Docker Engine 24+ with Docker Compose v2
+#   - (Optional) NVIDIA Container Toolkit for GPU-accelerated Wav2Lip
+#
+# Quick start:
+#   cp backend/.env.example backend/.env   # fill in credentials
+#   docker compose up --build
+#
+# Access:
+#   Frontend   http://localhost:3000
+#   Backend    http://localhost:8000
+#   API Docs   http://localhost:8000/docs
+#   Ollama     http://localhost:11434
 
+version: '3.9'
+
+# ── Networks ──────────────────────────────────────────────────────────────
+networks:
+  app-network:
+    driver: bridge
+
+# ── Named volumes ─────────────────────────────────────────────────────────
+volumes:
+  chroma_data:       # ChromaDB vector store (persisted between restarts)
+  video_data:        # Generated MP4 files (persisted between restarts)
+  ollama_models:     # Ollama model weights (~2 GB+ per model)
+  redis_data:        # Redis append-only log
+
+# ── Services ──────────────────────────────────────────────────────────────
 services:
-  # Redis for ephemeral session state
+
+  # ── Ollama — local LLM server ────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ephemeral-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - app-network
+    # GPU acceleration (NVIDIA) — comment out if no GPU available
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ── Ollama model pull — runs once then exits ────────────────────────────
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ephemeral-ollama-pull
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "ollama pull phi3:mini"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    networks:
+      - app-network
+
+  # ── Redis — ephemeral session state ─────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: ephemeral-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - app-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
-    networks:
-      - ephemeral-network
 
-  # Prometheus for monitoring
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: ephemeral-prometheus
+  # ── Backend — FastAPI + RAG engine ──────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ephemeral-backend
+    restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "8000:8000"
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    networks:
-      - ephemeral-network
-
-  # Grafana for visualization (optional)
-  grafana:
-    image: grafana/grafana:latest
-    container_name: ephemeral-grafana
-    ports:
-      - "3001:3000"
+      - chroma_data:/app/backend/chroma_db
+      - video_data:/app/data/videos
+      # Dev: mount source for hot-reload (remove in prod)
+      - ./backend:/app:cached
+    env_file:
+      - ./backend/.env
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
+      # Override values that must point at container service names
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - VIDEO_OUTPUT_DIR=/app/data/videos
+      - CHROMA_PERSIST_DIRECTORY=/app/backend/chroma_db
+      - API_RELOAD=true          # set false in prod profile
     depends_on:
-      - prometheus
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     networks:
-      - ephemeral-network
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s    # RAG warm-up takes ~30 s on first boot
+      retries: 6
 
-volumes:
-  redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
+  # ── Frontend — Vite dev server (default) ────────────────────────────────
+  frontend:
+    image: node:18-alpine
+    container_name: ephemeral-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app:cached
+      - /app/node_modules           # anonymous volume keeps host's node_modules out
+    environment:
+      - VITE_BACKEND_HOST=backend
+      - VITE_BACKEND_PORT=8000
+      - VITE_WS_PROTOCOL=ws
+      - VITE_BACKEND_PROTOCOL=http
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    profiles:
+      - dev          # only started with: docker compose --profile dev up
 
-networks:
-  ephemeral-network:
-    driver: bridge
+  # ── Frontend — nginx static (production profile) ────────────────────────
+  frontend-prod:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_BACKEND_HOST=localhost
+        - VITE_BACKEND_PORT=8000
+    container_name: ephemeral-frontend-prod
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    profiles:
+      - prod         # only started with: docker compose --profile prod up
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 # Made with Bob
