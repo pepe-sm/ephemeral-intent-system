@@ -121,6 +121,46 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Video registry poll ──────────────────────────────────────────────────
+  // After all modules arrive, poll /api/v1/sessions/{id}/videos every 15 s
+  // (up to 15 min) to pick up videos even if the WS was closed before they
+  // were ready.
+  useEffect(() => {
+    if (!videoEnabledRef.current) return;
+    if (streamedModules.length === 0) return;
+
+    const INTERVAL_MS  = 15_000;
+    const MAX_POLLS    = 60; // 15 min max
+    let   polls        = 0;
+    let   stopped      = false;
+
+    const poll = async () => {
+      if (stopped) return;
+      polls++;
+      try {
+        const res  = await fetch(`${config.backend_url}/api/v1/sessions/${sessionId}/videos`);
+        const data = await res.json();
+        const vids: Record<string, string> = data.videos ?? {};
+        if (Object.keys(vids).length > 0) {
+          setModuleVideos(prev => ({ ...prev, ...vids }));
+          setVideoPending(prev => {
+            const next = new Set(prev);
+            Object.keys(vids).forEach(id => next.delete(id));
+            return next;
+          });
+        }
+      } catch { /* ignore */ }
+      if (polls < MAX_POLLS && !stopped) {
+        setTimeout(poll, INTERVAL_MS);
+      }
+    };
+
+    // First poll after a short delay to let Phase 2 start
+    const t = setTimeout(poll, 5_000);
+    return () => { stopped = true; clearTimeout(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamedModules.length, sessionId]);
+
   useEffect(() => {
     setSession({
       id: sessionId,

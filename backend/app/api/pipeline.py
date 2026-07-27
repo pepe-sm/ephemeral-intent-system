@@ -5,7 +5,7 @@ orchestration logic lives here.  websocket.py handles only the WS connection
 and message routing.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import asyncio
 import logging
 import os
@@ -21,6 +21,27 @@ from app.models.biometric_token import BiometricAnalysisRequest, BiometricToken
 from app.models.knowledge_payload import RAGQueryRequest, KnowledgePayload
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-memory video registry
+# session_id → {module_id → video_url}
+# Persists even after the WebSocket closes so the frontend can poll for videos.
+# ---------------------------------------------------------------------------
+_video_registry: Dict[str, Dict[str, str]] = {}
+_video_registry_lock = threading.Lock()
+
+
+def register_video(session_id: str, module_id: str, video_url: str) -> None:
+    with _video_registry_lock:
+        if session_id not in _video_registry:
+            _video_registry[session_id] = {}
+        _video_registry[session_id][module_id] = video_url
+
+
+def get_session_videos(session_id: str) -> Dict[str, str]:
+    """Return {module_id: video_url} for a session."""
+    with _video_registry_lock:
+        return dict(_video_registry.get(session_id, {}))
 
 # ---------------------------------------------------------------------------
 # Service singletons — initialised lazily, one instance for the process life
@@ -144,36 +165,72 @@ async def handle_biometric_analysis(
         return None
 
 
-async def _generate_and_send_video(
+async def _safe_send(send_fn, session_id: str, payload: Dict[str, Any]) -> bool:
+    """Send a WS message, silently returning False if the socket has closed."""
+    try:
+        await send_fn(session_id, payload)
+        return True
+    except Exception:
+        return False
+
+
+async def _run_video_pipeline(
     send_fn,
     session_id: str,
-    module_id: str,
-    script: str,
+    modules: list,
     voice_pace: str,
     vg: VideoGenerator,
 ) -> None:
     """
-    Background coroutine: generate a video for one module and push a
-    ``video_ready`` message over the WebSocket once it's done.
-    Failures are logged but never propagate — video is enhancement-only.
+    Background task: generate one video per module SEQUENTIALLY after all
+    content has been streamed.
+
+    Sequential execution is intentional:
+      - Wav2Lip is CPU-heavy; parallel runs overload the machine.
+      - The user already has all text; video is an enhancement.
+
+    Each finished video is:
+      1. Registered in the in-process video registry (survives WS close).
+      2. Pushed via WS if the socket is still open.
+
+    The frontend polls /api/v1/sessions/{session_id}/videos to pick up
+    any videos it missed while the WS was reconnecting.
     """
-    try:
-        result = await vg.generate_async(script=script, session_id=session_id, voice_pace=voice_pace)
-        if result.success and result.video_path and not result.is_mock:
-            filename = result.video_path.name
-            await _send(send_fn, session_id, {
-                "type": "video_ready",
-                "data": {
-                    "module_id": module_id,
-                    "video_url": f"/api/v1/video/{filename}",
-                    "generation_time_ms": result.generation_time_ms,
-                },
-            })
-            logger.info(f"video_ready sent for module {module_id} [{session_id}]")
-        elif result.is_mock:
-            logger.debug(f"Video mock for module {module_id} — tools not configured")
-    except Exception as exc:
-        logger.warning(f"Video generation failed for module {module_id} [{session_id}]: {exc}")
+    logger.info(f"[VideoJob] Starting sequential video generation for {len(modules)} modules [{session_id}]")
+    for module in modules:
+        module_id = module.module_id
+        script = f"{module.title}. {module.content}"
+        try:
+            result = await vg.generate_async(
+                script=script,
+                session_id=session_id,
+                voice_pace=voice_pace,
+            )
+            if result.success and result.video_path and not result.is_mock:
+                video_url = f"/api/v1/video/{result.video_path.name}"
+                # Always register — survives WS close
+                register_video(session_id, module_id, video_url)
+                # Push WS notification (best-effort)
+                delivered = await _safe_send(send_fn, session_id, {
+                    "type": "video_ready",
+                    "data": {
+                        "module_id": module_id,
+                        "video_url": video_url,
+                        "generation_time_ms": result.generation_time_ms,
+                    },
+                })
+                logger.info(
+                    f"[VideoJob] {module_id} ready in {result.generation_time_ms:.0f}ms "
+                    f"(WS {'delivered' if delivered else 'closed — stored in registry'}) [{session_id}]"
+                )
+            elif result.is_mock:
+                logger.debug(f"[VideoJob] Mock result for {module_id} — pipeline not configured")
+            else:
+                logger.warning(f"[VideoJob] Generation failed for {module_id}: {result.error}")
+        except Exception as exc:
+            logger.warning(f"[VideoJob] Exception for {module_id} [{session_id}]: {exc}", exc_info=True)
+
+    logger.info(f"[VideoJob] All videos complete for session {session_id}")
 
 
 async def handle_knowledge_query(
@@ -183,12 +240,15 @@ async def handle_knowledge_query(
     biometric_token: Optional[BiometricToken] = None,
 ) -> Optional[KnowledgePayload]:
     """
-    Streams modules to the frontend one-by-one as the LLM generates them,
-    so the user sees the first module ~6 s after submission rather than
-    waiting for the full response.  Sends a final knowledge_payload message
-    with all modules once generation is complete.
+    Phase 1 — Stream content: yield TeachingModule objects to the frontend
+    one at a time as the LLM generates them (fast first-byte).
+
+    Phase 2 — Generate videos: after ALL modules are collected, fire a
+    single background task that produces one MP4 per module sequentially.
+    Videos are pushed via WS and also stored in the video registry so the
+    frontend can poll for them even if the WS has closed.
     """
-    from app.models.knowledge_payload import ComplexityLevel, KnowledgePayload, ModuleType
+    from app.models.knowledge_payload import ComplexityLevel, KnowledgePayload
     from datetime import datetime
 
     try:
@@ -199,12 +259,10 @@ async def handle_knowledge_query(
         logger.info(f"RAG query (streaming) [{session_id}]: {query}")
 
         collected: list = []
-        video_tasks: list = []  # background video generation tasks
 
-        # Stream modules as they are parsed from the LLM output
+        # ── Phase 1: stream modules ────────────────────────────────────────
         async for module in engine.stream_modules(query, complexity):
             collected.append(module)
-            # Send each module immediately so the frontend can render it
             await _send(send_fn, session_id, {
                 "type": "module_stream",
                 "data": {
@@ -222,19 +280,6 @@ async def handle_knowledge_query(
                 },
             })
             logger.info(f"Module {module.module_id} streamed [{session_id}]: {module.title[:40]}")
-
-            # Fire video generation for each module in the background (non-blocking)
-            vg = get_video_generator()
-            if vg.is_ready():
-                module_id = module.module_id
-                script = f"{module.title}. {module.content}"
-                task = asyncio.ensure_future(
-                    _generate_and_send_video(
-                        send_fn, session_id, module_id,
-                        script, voice_pace, vg,
-                    )
-                )
-                video_tasks.append(task)
 
         if not collected:
             await _send(send_fn, session_id, {
@@ -286,6 +331,16 @@ async def handle_knowledge_query(
             },
         })
         logger.info(f"Knowledge payload sent [{session_id}] — {len(collected)} modules")
+
+        # ── Phase 2: kick off video generation AFTER all content is ready ─
+        vg = get_video_generator()
+        if vg.is_ready():
+            # Fire-and-forget background task — sequential, one MP4 per module
+            asyncio.ensure_future(
+                _run_video_pipeline(send_fn, session_id, list(collected), voice_pace, vg)
+            )
+            logger.info(f"Video pipeline scheduled for {len(collected)} modules [{session_id}]")
+
         return payload
 
     except Exception as exc:

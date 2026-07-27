@@ -52,14 +52,26 @@ import re as _re
 # ---------------------------------------------------------------------------
 
 def _build_prompt(query: str, complexity) -> str:
-    """Minimal prompt that works well across llama3.2, phi3:mini, and watsonx."""
+    """Prompt tuned for llama3.2 / phi3:mini to produce long, complete paragraphs."""
+    level_hint = {
+        "beginner":     "simple language, no jargon, use everyday analogies",
+        "intermediate": "accurate technical language, assume some background knowledge",
+        "advanced":     "precise terminology, discuss trade-offs and internals",
+    }.get(getattr(complexity, "value", str(complexity)), "clear language")
+
     return (
-        f"You are a teaching assistant. Explain '{query}' at {complexity.value} level.\n"
-        f"Write 3 separate paragraphs. Each paragraph = one learning module.\n"
-        f"Paragraph 1: What it is (definition + how it works).\n"
-        f"Paragraph 2: Why it matters / key concepts.\n"
-        f"Paragraph 3: Concrete example or step-by-step.\n"
-        f"Keep each paragraph to 3-4 sentences. No bullet points, no markdown headers.\n\n"
+        f"You are an expert teaching assistant. Your student wants to learn about: {query}\n"
+        f"Difficulty level: {complexity.value if hasattr(complexity, 'value') else complexity} — use {level_hint}.\n\n"
+        f"Write exactly 3 learning modules separated by a blank line.\n"
+        f"Each module must be a single paragraph of 5 to 7 complete sentences.\n"
+        f"Module 1: Define the concept thoroughly, explain how it works internally.\n"
+        f"Module 2: Explain why it matters, list key properties or rules, give a real-world use-case.\n"
+        f"Module 3: Walk through a concrete hands-on example step by step.\n\n"
+        f"Rules:\n"
+        f"- Do NOT use markdown (no **, no ##, no bullet points, no numbered lists).\n"
+        f"- Do NOT include module titles or labels — start each paragraph directly with the content.\n"
+        f"- Every paragraph must be at least 200 words.\n"
+        f"- Write each paragraph as flowing prose, not as a list.\n\n"
     )
 
 
@@ -143,32 +155,25 @@ def _para_to_module(para: str, index: int, complexity, query: str = "") -> "Teac
     """Convert a paragraph of text into a TeachingModule. Returns None if too short."""
     from app.models.knowledge_payload import TeachingModule  # type: ignore
     clean = _clean(para)
-    # Skip anything that is just a short header with no body (< 80 chars)
-    if len(clean) < 80:
+    # Skip anything that is just a short header with no body (< 120 chars)
+    if len(clean) < 120:
         return None
 
-    # Title: use the first sentence only if it's a reasonable title length (≤ 60 chars)
-    # Otherwise fall back to a meaningful positional default
-    first_line = clean.split('\n')[0]
-    sentences = _re.split(r'(?<=[.!?])\s', first_line)
-    first_sentence = sentences[0] if sentences else first_line
+    # Always use a positional default title and keep the full paragraph as content.
+    # This prevents half the content being eaten as a "title".
+    title = _DEFAULT_TITLES[index] if index < len(_DEFAULT_TITLES) else f"Module {index + 1}"
+    content = clean
 
-    if 10 <= len(first_sentence) <= 60:
-        title = first_sentence.rstrip('.').strip()
-        content_after = clean[len(first_sentence):].strip()
-        # If stripping the title leaves no real content, use the whole paragraph as content
-        content = content_after if len(content_after) > 40 else clean
-    else:
-        # First sentence is too long or too short — use a descriptive default
-        title = _DEFAULT_TITLES[index] if index < len(_DEFAULT_TITLES) else f"Module {index + 1}"
-        content = clean
+    # Estimate reading time: ~150 words per minute, min 60 s
+    word_count = len(content.split())
+    estimated_time = max(60, int((word_count / 150) * 60))
 
     return TeachingModule(
         module_id=f"mod_{index + 1:03d}",
         type=_infer_type(clean, index),
         title=title,
         content=content,
-        estimated_time=60 + index * 30,
+        estimated_time=estimated_time,
         complexity=complexity,
         interactive=index > 0,
         order=index,
@@ -609,7 +614,7 @@ class RAGEngine:
                     model=self.ollama_model,
                     prompt=_build_prompt(query, complexity),
                     stream=True,
-                    options={"num_predict": 400, "temperature": 0.4},
+                    options={"num_predict": 1200, "temperature": 0.5},
                 ):
                     q.put(chunk.response)
                     if chunk.done:
@@ -642,7 +647,7 @@ class RAGEngine:
             carry = ""
             for p in ready_parts:
                 combined = (carry + "\n\n" + p).strip() if carry else p.strip()
-                if len(combined) >= 150 or flush:
+                if len(combined) >= 200 or flush:
                     merged.append(combined)
                     carry = ""
                 else:

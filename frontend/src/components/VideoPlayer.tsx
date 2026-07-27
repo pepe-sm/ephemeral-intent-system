@@ -2,11 +2,13 @@
  * VideoPlayer
  * Displays a generated talking-head video for a teaching module.
  * Renders nothing when no video URL is available (graceful degradation).
- * Includes a timeline scrubber, current-time/duration display, and mute toggle.
+ * Includes a timeline scrubber, current-time/duration display, mute toggle,
+ * and a download button.
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, Video } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Video, Download } from 'lucide-react';
+import { config } from '@/config';
 
 interface Props {
   /** URL returned by the backend video_ready message, e.g. /api/v1/video/abc123.mp4 */
@@ -89,6 +91,11 @@ export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
   }
 
   const progress = duration > 0 ? (current / duration) * 100 : 0;
+  // Build an absolute download URL (works in both dev proxy and production)
+  const downloadUrl = videoUrl.startsWith('http') ? videoUrl : `${config.backend_url || 'http://localhost:8000'}${videoUrl}`;
+  const downloadFilename = moduleTitle
+    ? `${moduleTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`
+    : 'lecture_video.mp4';
 
   return (
     <div className="mt-4 rounded-xl overflow-hidden border border-gray-200 bg-black">
@@ -96,11 +103,19 @@ export function VideoPlayer({ videoUrl, moduleTitle }: Props) {
       <div className="flex items-center justify-between px-3 py-1.5 bg-gray-900">
         <div className="flex items-center gap-1.5 text-xs text-gray-400">
           <Video className="w-3.5 h-3.5 text-blue-400" />
-          <span className="truncate max-w-[220px]">
+          <span className="truncate max-w-[180px]">
             {moduleTitle ? `Video: ${moduleTitle}` : 'AI-generated video'}
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <a
+            href={downloadUrl}
+            download={downloadFilename}
+            className="p-1 text-gray-400 hover:text-white transition-colors"
+            title="Download MP4"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </a>
           <button
             onClick={toggleMute}
             className="p-1 text-gray-400 hover:text-white transition-colors"

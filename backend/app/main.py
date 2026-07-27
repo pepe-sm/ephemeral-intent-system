@@ -21,7 +21,7 @@ from typing import Dict, Any, Optional
 import os
 
 from app.api.websocket import websocket_endpoint
-from app.api.pipeline import get_rag_engine, is_rag_ready, get_lifecycle_manager
+from app.api.pipeline import get_rag_engine, is_rag_ready, get_lifecycle_manager, get_session_videos
 from app.services.video_generator import VideoGenerator
 
 logging.basicConfig(
@@ -407,6 +407,23 @@ async def ingest_resource_url(
         "documents_processed": 1,
         "characters_extracted": len(text),
     }
+
+
+# ---------------------------------------------------------------------------
+# Video registry polling
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/sessions/{session_id}/videos", tags=["Video"])
+async def get_session_video_registry(session_id: str) -> Dict[str, Any]:
+    """
+    Poll for all videos generated for a session.
+    Returns {module_id: video_url} map.
+
+    The frontend calls this after reconnecting or on page load to pick up
+    any videos that were generated while the WebSocket was closed.
+    """
+    videos = get_session_videos(session_id)
+    return {"session_id": session_id, "videos": videos, "count": len(videos)}
 
 
 # ---------------------------------------------------------------------------
