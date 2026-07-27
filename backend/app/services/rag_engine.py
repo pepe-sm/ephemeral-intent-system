@@ -52,7 +52,8 @@ import re as _re
 # ---------------------------------------------------------------------------
 
 def _build_prompt(query: str, complexity) -> str:
-    """Prompt tuned for llama3.2 / phi3:mini to produce long, complete paragraphs."""
+    """Prompt tuned for phi3:mini / llama3.2 on CPU-only / low-RAM hardware.
+    Kept deliberately short so the model hits the token limit quickly."""
     level_hint = {
         "beginner":     "simple language, no jargon, use everyday analogies",
         "intermediate": "accurate technical language, assume some background knowledge",
@@ -60,18 +61,13 @@ def _build_prompt(query: str, complexity) -> str:
     }.get(getattr(complexity, "value", str(complexity)), "clear language")
 
     return (
-        f"You are an expert teaching assistant. Your student wants to learn about: {query}\n"
-        f"Difficulty level: {complexity.value if hasattr(complexity, 'value') else complexity} — use {level_hint}.\n\n"
-        f"Write exactly 3 learning modules separated by a blank line.\n"
-        f"Each module must be a single paragraph of 5 to 7 complete sentences.\n"
-        f"Module 1: Define the concept thoroughly, explain how it works internally.\n"
-        f"Module 2: Explain why it matters, list key properties or rules, give a real-world use-case.\n"
-        f"Module 3: Walk through a concrete hands-on example step by step.\n\n"
-        f"Rules:\n"
-        f"- Do NOT use markdown (no **, no ##, no bullet points, no numbered lists).\n"
-        f"- Do NOT include module titles or labels — start each paragraph directly with the content.\n"
-        f"- Every paragraph must be at least 200 words.\n"
-        f"- Write each paragraph as flowing prose, not as a list.\n\n"
+        f"You are a concise teaching assistant. Topic: {query}\n"
+        f"Level: {complexity.value if hasattr(complexity, 'value') else complexity} — {level_hint}.\n\n"
+        f"Write exactly 3 paragraphs separated by a blank line.\n"
+        f"Each paragraph: 3 to 5 sentences, plain prose, no markdown, no bullet points, no titles.\n"
+        f"Paragraph 1: What it is and how it works.\n"
+        f"Paragraph 2: Why it matters and a real-world use-case.\n"
+        f"Paragraph 3: A short hands-on example.\n\n"
     )
 
 
@@ -614,7 +610,9 @@ class RAGEngine:
                     model=self.ollama_model,
                     prompt=_build_prompt(query, complexity),
                     stream=True,
-                    options={"num_predict": 1200, "temperature": 0.5},
+                    # 500 tokens ≈ 3 solid paragraphs; stays manageable on CPU-only hardware.
+                    # Increase to 800-1200 if you have a GPU or ≥16 GB RAM.
+                    options={"num_predict": 500, "temperature": 0.5},
                 ):
                     q.put(chunk.response)
                     if chunk.done:
@@ -633,9 +631,11 @@ class RAGEngine:
         def _pop_complete_paragraphs(flush: bool) -> list:
             """Return complete double-newline-separated paragraphs.
 
-            A paragraph is only 'ready' once it has real content (>= 150 chars).
+            A paragraph is only 'ready' once it has real content (>= 80 chars).
             Short fragments (e.g. a bolded header the LLM emits before the body)
             are held in the buffer and merged with the next chunk.
+            Threshold is 80 (not 200) to work well with the shorter 3-5 sentence
+            paragraphs generated when num_predict=500.
             """
             nonlocal accumulated
             parts = accumulated.split("\n\n")
@@ -647,7 +647,7 @@ class RAGEngine:
             carry = ""
             for p in ready_parts:
                 combined = (carry + "\n\n" + p).strip() if carry else p.strip()
-                if len(combined) >= 200 or flush:
+                if len(combined) >= 80 or flush:
                     merged.append(combined)
                     carry = ""
                 else:
@@ -664,10 +664,12 @@ class RAGEngine:
         while True:
             try:
                 token = await asyncio.wait_for(
-                    loop.run_in_executor(None, q.get), timeout=120
+                    # 300 s per inter-token gap covers cold-start on low-RAM CPU machines.
+                    # The first token on a freshly loaded model can take 2-3 min on 8 GB RAM.
+                    loop.run_in_executor(None, q.get), timeout=300
                 )
             except asyncio.TimeoutError:
-                logger.error("Ollama stream timed out")
+                logger.error("Ollama stream timed out waiting for next token (>300 s)")
                 break
 
             is_done = token is _DONE

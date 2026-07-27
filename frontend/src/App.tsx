@@ -193,14 +193,14 @@ function App() {
 
       // 120 s timeout — local LLMs can take 30–90 s on first token
       const t = setTimeout(() => {
-        setIsLoadingContent(false);
-        setStreamedModules(prev => {
-          if (prev.length === 0) {
-            setError('Request timed out (120 s). Make sure the backend and Ollama are running.');
-          }
-          return prev;
-        });
-      }, 120_000);
+          setIsLoadingContent(false);
+          setStreamedModules(prev => {
+            if (prev.length === 0) {
+              setError('Request timed out (5 min). The AI model is still loading — wait 30 s and try again, or close other apps to free RAM.');
+            }
+            return prev;
+          });
+        }, 300_000);
       return () => clearTimeout(t);
     },
     [sendFullPipeline, setError]
